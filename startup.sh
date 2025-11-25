@@ -1,0 +1,3 @@
+#!/bin/bash
+pip install fastapi==0.115.0 uvicorn[standard]==0.30.6 openai==1.52.0 httpx==0.27.2 pydantic==2.9.2 python-dotenv==1.0.1
+python app.py
