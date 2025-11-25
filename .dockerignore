@@ -1,0 +1,35 @@
+# Local directories (not needed in container)
+cache/
+logs/
+newdocs/
+.claude/
+scripts/
+
+# Documentation
+*.md
+CLAUDE.md
+README.md
+SETUP_GUIDE.md
+
+# Teams manifest files (reference only)
+manifest.json
+color.png
+outline.png
+rueko-bot-app.zip
+
+# Environment templates
+.env.template
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+rag/__pycache__/
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
