@@ -344,8 +344,8 @@ OTHER COLUMNS:
                 print(f"[PostgreSQL] Blocked dangerous SQL: {keyword}")
                 return []
 
-        # Must be a SELECT
-        if not sql_upper.startswith('SELECT'):
+        # Must be a SELECT (or UNION which starts with (SELECT)
+        if not (sql_upper.startswith('SELECT') or sql_upper.startswith('(SELECT')):
             print("[PostgreSQL] Only SELECT queries allowed")
             return []
 
@@ -355,8 +355,10 @@ OTHER COLUMNS:
             return []
 
         # Add LIMIT only if SQL looks complete (ends with proper clause)
+        # BUT don't add LIMIT to UNION queries (they already have it or would break)
         sql = sql.rstrip(';')
-        if 'LIMIT' not in sql_upper:
+        is_union_query = 'UNION' in sql_upper
+        if 'LIMIT' not in sql_upper and not is_union_query:
             sql += ' LIMIT 100'
 
         return self.execute_query(sql)
