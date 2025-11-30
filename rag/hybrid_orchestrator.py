@@ -253,45 +253,65 @@ Gib NUR das SQL aus, kein Markdown."""
         return QueryContext(QueryType.FILTER, 0.5, ['geraetegruppe'])
 
     async def generate_sql(self, query: str, context: QueryContext) -> str:
-        """Generate SQL using AI - translate to English first for better results"""
-        try:
-            # Translate German query to English for better SQL generation
-            # but preserve equipment terms
-            english_query = await self.translate_for_sql(query)
-            if self.verbose:
-                print(f"[SQL] Translated: {english_query[:50]}...")
+        """Generate SQL using AI with retry logic for robustness"""
+        max_retries = 2
 
-            # Generate SQL
-            response = await self.client.responses.create(
-                model=self.model,
-                input=[
-                    {"role": "system", "content": self._build_sql_prompt()},
-                    {"role": "user", "content": english_query}
-                ],
-                max_output_tokens=800
-            )
+        for attempt in range(max_retries):
+            try:
+                # Translate German query to English for better SQL generation
+                english_query = await self.translate_for_sql(query)
+                if self.verbose and attempt == 0:
+                    print(f"[SQL] Translated: {english_query[:50]}...")
 
-            sql = response.output_text.strip() if response.output_text else ""
+                # Add explicit instruction on retry
+                prompt = english_query
+                if attempt > 0:
+                    prompt = f"Erstelle NUR SQL, keine Erklärung. Frage: {english_query}"
 
-            # Remove markdown code fences if present
-            sql = re.sub(r'^```\w*\n?', '', sql)
-            sql = re.sub(r'\n?```$', '', sql)
-            sql = sql.strip()
+                # Generate SQL
+                response = await self.client.responses.create(
+                    model=self.model,
+                    input=[
+                        {"role": "system", "content": self._build_sql_prompt()},
+                        {"role": "user", "content": prompt}
+                    ],
+                    max_output_tokens=800
+                )
 
-            # Validate SQL - accept SELECT or (SELECT for UNION queries
-            sql_upper = sql.upper().strip()
-            if not sql or not (sql_upper.startswith('SELECT') or sql_upper.startswith('(SELECT')):
-                print(f"[SQL] Invalid output: {sql[:50] if sql else 'empty'}")
-                return ""
+                sql = response.output_text.strip() if response.output_text else ""
 
-            if self.verbose:
-                print(f"[SQL] {sql[:100]}...")
+                # Remove markdown code fences if present
+                sql = re.sub(r'^```\w*\n?', '', sql)
+                sql = re.sub(r'\n?```$', '', sql)
+                sql = sql.strip()
 
-            return sql
+                # Also try to extract SQL if wrapped in explanation
+                if sql and 'SELECT' in sql.upper():
+                    # Find the SELECT statement in the output
+                    match = re.search(r'((?:\(SELECT|SELECT)[\s\S]+?)(?:;|\Z)', sql, re.IGNORECASE)
+                    if match:
+                        sql = match.group(1).strip()
 
-        except Exception as e:
-            print(f"[SQL] Error: {e}")
-            return ""
+                # Validate SQL - accept SELECT or (SELECT for UNION queries
+                sql_upper = sql.upper().strip()
+                if not sql or not (sql_upper.startswith('SELECT') or sql_upper.startswith('(SELECT')):
+                    if attempt < max_retries - 1:
+                        print(f"[SQL] Retry {attempt + 1}: Invalid output")
+                        continue
+                    print(f"[SQL] Invalid output: {sql[:50] if sql else 'empty'}")
+                    return ""
+
+                if self.verbose:
+                    print(f"[SQL] {sql[:100]}...")
+
+                return sql
+
+            except Exception as e:
+                print(f"[SQL] Error (attempt {attempt + 1}): {e}")
+                if attempt == max_retries - 1:
+                    return ""
+
+        return ""
 
     async def execute_query(self, query: str, context: QueryContext) -> Tuple[List[Dict], str]:
         """Execute SQL query"""
