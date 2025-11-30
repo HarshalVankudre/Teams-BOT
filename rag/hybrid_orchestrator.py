@@ -137,7 +137,9 @@ JSON-Antwort:
     def _build_sql_prompt(self) -> str:
         """Build SQL generation prompt with schema info"""
         schema = self.postgres.SCHEMA_INFO if self.postgres else ""
-        return f"""Du bist PostgreSQL-Experte. Erstelle SQL für Tabelle 'geraete' (Baumaschinen).
+        return f"""Du bist PostgreSQL-Experte. Erstelle NUR SQL für Tabelle 'geraete' (Baumaschinen).
+
+WICHTIG: Antworte NUR mit dem SQL Query. Keine Erklärungen, kein Markdown, nur SQL!
 
 {schema}
 
@@ -252,8 +254,62 @@ Gib NUR das SQL aus, kein Markdown."""
 
         return QueryContext(QueryType.FILTER, 0.5, ['geraetegruppe'])
 
+    def _get_fallback_sql(self, query: str, context: QueryContext) -> str:
+        """Generate fallback SQL for common query patterns when LLM fails"""
+        q = query.lower()
+
+        # Comparison: Kettenbagger vs Mobilbagger
+        if context.query_type == QueryType.COMPARISON:
+            if 'kettenbagger' in q and 'mobilbagger' in q:
+                return """SELECT geraetegruppe,
+                    COUNT(*) as anzahl,
+                    ROUND(AVG((eigenschaften_json->>'gewicht_kg')::numeric)) as avg_gewicht,
+                    ROUND(AVG((eigenschaften_json->>'motor_leistung_kw')::numeric)) as avg_leistung
+                FROM geraete
+                WHERE geraetegruppe ILIKE '%bagger%'
+                    AND (geraetegruppe ILIKE '%Ketten%' OR geraetegruppe ILIKE '%Mobil%')
+                    AND eigenschaften_json->>'gewicht_kg' ~ '^[0-9.]+$'
+                GROUP BY geraetegruppe
+                ORDER BY avg_gewicht DESC"""
+
+            # Generic comparison - extract equipment types
+            types = []
+            for keyword in ['bagger', 'lader', 'walze', 'fertiger', 'fräse', 'kran']:
+                if keyword in q:
+                    types.append(keyword)
+
+            if types:
+                conditions = " OR ".join([f"geraetegruppe ILIKE '%{t}%'" for t in types])
+                return f"""SELECT geraetegruppe,
+                    COUNT(*) as anzahl,
+                    ROUND(AVG((eigenschaften_json->>'gewicht_kg')::numeric)) as avg_gewicht,
+                    ROUND(AVG((eigenschaften_json->>'motor_leistung_kw')::numeric)) as avg_leistung
+                FROM geraete
+                WHERE ({conditions})
+                    AND eigenschaften_json->>'gewicht_kg' ~ '^[0-9.]+$'
+                GROUP BY geraetegruppe
+                ORDER BY avg_gewicht DESC
+                LIMIT 20"""
+
+        # Multi-manufacturer count
+        if context.query_type == QueryType.AGGREGATION:
+            manufacturers = []
+            for m in ['liebherr', 'caterpillar', 'bomag', 'vögele', 'hamm', 'wirtgen', 'kubota', 'volvo', 'dynapac']:
+                if m in q:
+                    manufacturers.append(m.title())
+
+            if len(manufacturers) >= 2:
+                m_list = "', '".join(manufacturers)
+                return f"""SELECT hersteller, COUNT(*) as anzahl
+                FROM geraete
+                WHERE LOWER(hersteller) IN ('{m_list.lower()}')
+                GROUP BY hersteller
+                ORDER BY anzahl DESC"""
+
+        return ""
+
     async def generate_sql(self, query: str, context: QueryContext) -> str:
-        """Generate SQL using AI with retry logic for robustness"""
+        """Generate SQL using AI with retry logic and fallback patterns"""
         max_retries = 2
 
         for attempt in range(max_retries):
@@ -263,9 +319,18 @@ Gib NUR das SQL aus, kein Markdown."""
                 if self.verbose and attempt == 0:
                     print(f"[SQL] Translated: {english_query[:50]}...")
 
-                # Add explicit instruction on retry
+                # Build a more explicit prompt based on query type and retry
                 prompt = english_query
-                if attempt > 0:
+                if context.query_type == QueryType.COMPARISON:
+                    prompt = f"""VERGLEICH-ANFRAGE: {english_query}
+
+WICHTIG: Erstelle eine GROUP BY Abfrage die beide Gruppen vergleicht mit:
+- COUNT(*) as anzahl
+- AVG(gewicht_kg) as avg_gewicht
+- AVG(motor_leistung_kw) as avg_leistung
+
+Antworte NUR mit SQL, keine Erklärung!"""
+                elif attempt > 0:
                     prompt = f"Erstelle NUR SQL, keine Erklärung. Frage: {english_query}"
 
                 # Generate SQL
@@ -298,6 +363,11 @@ Gib NUR das SQL aus, kein Markdown."""
                     if attempt < max_retries - 1:
                         print(f"[SQL] Retry {attempt + 1}: Invalid output")
                         continue
+                    # Try fallback SQL before giving up
+                    fallback = self._get_fallback_sql(query, context)
+                    if fallback:
+                        print(f"[SQL] Using fallback SQL for {context.query_type.value}")
+                        return fallback
                     print(f"[SQL] Invalid output: {sql[:50] if sql else 'empty'}")
                     return ""
 
@@ -309,6 +379,11 @@ Gib NUR das SQL aus, kein Markdown."""
             except Exception as e:
                 print(f"[SQL] Error (attempt {attempt + 1}): {e}")
                 if attempt == max_retries - 1:
+                    # Try fallback SQL on error
+                    fallback = self._get_fallback_sql(query, context)
+                    if fallback:
+                        print(f"[SQL] Using fallback SQL after error")
+                        return fallback
                     return ""
 
         return ""

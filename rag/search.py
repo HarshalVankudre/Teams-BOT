@@ -316,7 +316,10 @@ DATENBANK-ERGEBNISSE ({result_count} Datensätze):
 ANWEISUNGEN:
 1. Antworte in vollständigen deutschen Sätzen, nicht nur mit Zahlen
 2. Bei Zählungen: "Wir haben X Geräte im Bestand" statt nur "X"
-3. Bei Vergleichen: Erkläre die Unterschiede ausführlich
+3. Bei Vergleichen (comparison):
+   - Zeige beide Gruppen mit Anzahl, Durchschnittsgewicht und Durchschnittsleistung
+   - Erkläre die Unterschiede: "Kettenbagger sind im Durchschnitt X kg schwerer als Mobilbagger"
+   - Nenne typische Einsatzgebiete je Typ wenn sinnvoll
 
 WICHTIG - Bei vielen Ergebnissen (mehr als 5):
 - Zeige nur die TOP 3 relevantesten Ergebnisse mit Details (Hersteller, Modell, Gewicht, Leistung)
