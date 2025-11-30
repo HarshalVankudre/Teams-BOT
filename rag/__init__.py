@@ -1,9 +1,9 @@
 """
 Custom RAG Pipeline for Teams Bot
-- Semantic chunking with GPT-5.1
+- Hybrid routing: PostgreSQL (structured) + Pinecone (semantic)
 - OpenAI text-embedding-3-large embeddings
-- Pinecone vector database
-- Rich metadata support
+- AI-powered SQL generation for equipment queries
+- Multi-source search with Tavily web integration
 """
 
 from .config import RAGConfig
