@@ -19,9 +19,11 @@ import httpx
 import redis.asyncio as redis
 from dotenv import load_dotenv
 from commands import handle_command
+import time
 
 # Custom RAG imports
 from rag.search import RAGSearch
+from rag.feedback import feedback_service
 
 # Load environment variables from .env file
 load_dotenv()
@@ -31,40 +33,54 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 BOT_APP_ID = os.getenv("BOT_APP_ID", "")
 BOT_APP_PASSWORD = os.getenv("BOT_APP_PASSWORD", "")
 
-# Model configuration
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.1")
-REASONING_EFFORT = os.getenv("REASONING_EFFORT", "low")  # none, low, medium, high
-VECTOR_STORE_ID = os.getenv("VECTOR_STORE_ID", "vs_68f523d8f20081918a7a6e746e17bbbb")
+# Model configuration (REQUIRED - from .env, no hardcoded defaults)
+OPENAI_MODEL = os.getenv("OPENAI_MODEL")
+REASONING_EFFORT = os.getenv("REASONING_EFFORT")
+if not OPENAI_MODEL or not REASONING_EFFORT:
+    raise ValueError("OPENAI_MODEL and REASONING_EFFORT must be set in .env file")
+VECTOR_STORE_ID = os.getenv("VECTOR_STORE_ID", "")
 # Redis configuration
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 CONVERSATION_TTL_HOURS = int(os.getenv("CONVERSATION_TTL_HOURS", "24"))
 
 # Custom RAG configuration
 USE_CUSTOM_RAG = os.getenv("USE_CUSTOM_RAG", "true").lower() == "true"
+USE_HYBRID_RAG = os.getenv("USE_HYBRID_RAG", "false").lower() == "true"
 
-SYSTEM_INSTRUCTIONS = os.getenv("SYSTEM_INSTRUCTIONS", """Du bist der RÜKO Dokumentenassistent. Beantworte Fragen basierend auf den Unternehmensdokumenten.
+SYSTEM_INSTRUCTIONS = os.getenv("SYSTEM_INSTRUCTIONS", """Du bist der RÜKO AI-Assistent mit Zugriff auf interne Datenbanken und ergänzende Web-Suche.
+
+DATENPRIORITÄT (WICHTIG):
+1. INTERNE DATEN haben IMMER Vorrang:
+   - Dokumentendatenbank (rueko-documents): Unternehmensrichtlinien, Anleitungen, Prozesse
+   - Maschinendatenbank (machinery-data): 2.395 Baumaschinen mit technischen Daten
+2. Web-Suche (Tavily) ist NUR ERGÄNZEND für aktuelle Preise, externe Spezifikationen
+3. Bei Widersprüchen: Interne Daten sind IMMER maßgeblich
 
 KERNREGELN:
-1. Durchsuche IMMER zuerst die Dokumente
-2. Antworte NUR basierend auf gefundenen Dokumenten
-3. Zitiere Quellen: "Laut [Dokument]..."
+1. Durchsuche und nutze IMMER zuerst die internen Datenbanken
+2. Zitiere Quellen: "Laut [interner Quelle]..." oder "Laut [Web-Quelle]..."
+3. Web-Informationen nur als Ergänzung, nie als Hauptquelle
 
-ANTWORTLÄNGE - WICHTIG:
-- Einfache Fragen: 2-4 Sätze (50-100 Wörter)
-- Mittlere Fragen: 1-2 kurze Absätze (100-200 Wörter)
-- Komplexe Fragen: max. 300 Wörter, strukturiert mit Aufzählungen
-- NIEMALS mehr als 400 Wörter - sei PRÄZISE und KOMPAKT
+MASCHINENFRAGEN:
+- Gib ALLE verfügbaren technischen Details aus der internen Datenbank
+- Seriennummer/Inventarnummer: Zeige alle gespeicherten Eigenschaften
+- Empfehlungen: Basierend auf Arbeitsbreite, Leistung, Einsatzgebiet aus internen Daten
+- Verfügbarkeit: "Vermietung" oder "Verkauf" aus Maschinendatenbank
+
+ANTWORTLÄNGE:
+- Einfache Fragen: 2-4 Sätze
+- Maschinendaten: Vollständige strukturierte Liste
+- Komplexe Fragen: max. 500 Wörter, mit Aufzählungen
 
 FORMAT:
 - Direkte Antwort zuerst
-- Nur relevante Details, keine Wiederholungen
-- Aufzählungen statt langer Absätze
-- Quellenangabe am Ende
+- Technische Daten in übersichtlichen Listen
+- Quellenangabe am Ende (intern vs. web kennzeichnen)
 
-WENN NICHT GEFUNDEN:
-"Diese Info ist nicht in den Dokumenten vorhanden."
+WENN KEINE INTERNEN DATEN:
+"In den internen Datenbanken wurde keine Information gefunden." + ggf. Web-Ergänzung
 
-Erfinde NIEMALS Informationen.""")
+Erfinde NIEMALS Informationen. Interne Daten = Wahrheit.""")
 
 # Debug output
 print(f"Bot App ID loaded: {BOT_APP_ID[:10]}..." if BOT_APP_ID else "Bot App ID NOT loaded!")
@@ -76,6 +92,7 @@ print(f"Vector Store ID: {VECTOR_STORE_ID}")
 print(f"Redis URL: {REDIS_URL[:50]}..." if len(REDIS_URL) > 50 else f"Redis URL: {REDIS_URL}")
 print(f"Conversation TTL: {CONVERSATION_TTL_HOURS} hours")
 print(f"Custom RAG (Pinecone): {'Enabled' if USE_CUSTOM_RAG else 'Disabled'}")
+print(f"Hybrid RAG (PostgreSQL + Pinecone): {'Enabled' if USE_HYBRID_RAG else 'Disabled'}")
 
 # Initialize async OpenAI client for streaming
 client = AsyncOpenAI(api_key=OPENAI_API_KEY)
@@ -334,12 +351,35 @@ async def messages(request: Request):
                 )
                 typing_manager.start()
 
+                # Track response time
+                start_time = time.time()
+
                 try:
                     # Get response from OpenAI Responses API with streaming
                     assistant_response = await get_assistant_response_streaming(request, thread_key, user_message)
                 finally:
                     # Always stop typing indicator when done
                     typing_manager.stop()
+
+                # Calculate response time in milliseconds
+                response_time_ms = int((time.time() - start_time) * 1000)
+
+                # Store conversation in feedback database
+                try:
+                    data_source = "hybrid_rag" if USE_HYBRID_RAG else ("custom_rag" if USE_CUSTOM_RAG else "openai_file_search")
+                    feedback_service.save_conversation(
+                        user_id=user_id,
+                        user_message=user_message,
+                        ai_response=assistant_response,
+                        user_name=user_name,
+                        user_email=user_email,
+                        conversation_thread_id=thread_key,
+                        response_time_ms=response_time_ms,
+                        query_type=None,  # Could be determined by RAG system
+                        data_source=data_source
+                    )
+                except Exception as fb_error:
+                    print(f"[Feedback] Error storing conversation: {fb_error}")
 
                 # Send reply back to Teams
                 await send_reply(
