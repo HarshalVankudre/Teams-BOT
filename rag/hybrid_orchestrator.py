@@ -263,12 +263,12 @@ Gib NUR das SQL aus, kein Markdown."""
             if 'kettenbagger' in q and 'mobilbagger' in q:
                 return """SELECT geraetegruppe,
                     COUNT(*) as anzahl,
-                    ROUND(AVG((eigenschaften_json->>'gewicht_kg')::numeric)) as avg_gewicht,
-                    ROUND(AVG((eigenschaften_json->>'motor_leistung_kw')::numeric)) as avg_leistung
+                    ROUND(AVG(CASE WHEN eigenschaften_json->>'gewicht_kg' ~ '^[0-9.]+$'
+                              THEN (eigenschaften_json->>'gewicht_kg')::numeric END)) as avg_gewicht,
+                    ROUND(AVG(CASE WHEN eigenschaften_json->>'motor_leistung_kw' ~ '^[0-9.]+$'
+                              THEN (eigenschaften_json->>'motor_leistung_kw')::numeric END)) as avg_leistung
                 FROM geraete
-                WHERE geraetegruppe ILIKE '%bagger%'
-                    AND (geraetegruppe ILIKE '%Ketten%' OR geraetegruppe ILIKE '%Mobil%')
-                    AND eigenschaften_json->>'gewicht_kg' ~ '^[0-9.]+$'
+                WHERE geraetegruppe IN ('Kettenbagger', 'Mobilbagger')
                 GROUP BY geraetegruppe
                 ORDER BY avg_gewicht DESC"""
 
@@ -282,11 +282,12 @@ Gib NUR das SQL aus, kein Markdown."""
                 conditions = " OR ".join([f"geraetegruppe ILIKE '%{t}%'" for t in types])
                 return f"""SELECT geraetegruppe,
                     COUNT(*) as anzahl,
-                    ROUND(AVG((eigenschaften_json->>'gewicht_kg')::numeric)) as avg_gewicht,
-                    ROUND(AVG((eigenschaften_json->>'motor_leistung_kw')::numeric)) as avg_leistung
+                    ROUND(AVG(CASE WHEN eigenschaften_json->>'gewicht_kg' ~ '^[0-9.]+$'
+                              THEN (eigenschaften_json->>'gewicht_kg')::numeric END)) as avg_gewicht,
+                    ROUND(AVG(CASE WHEN eigenschaften_json->>'motor_leistung_kw' ~ '^[0-9.]+$'
+                              THEN (eigenschaften_json->>'motor_leistung_kw')::numeric END)) as avg_leistung
                 FROM geraete
                 WHERE ({conditions})
-                    AND eigenschaften_json->>'gewicht_kg' ~ '^[0-9.]+$'
                 GROUP BY geraetegruppe
                 ORDER BY avg_gewicht DESC
                 LIMIT 20"""
