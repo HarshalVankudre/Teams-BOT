@@ -291,6 +291,61 @@ class RAGSearch:
             lines.append(f"\n{metadata['inhalt']}")
         return "\n".join(lines)
 
+    async def _generate_natural_response(
+        self,
+        query: str,
+        structured_data: str,
+        query_type: str,
+        raw_results: list = None
+    ) -> str:
+        """Generate natural language response from PostgreSQL structured data using LLM"""
+        try:
+            # Build context about the data
+            result_count = len(raw_results) if raw_results else 0
+
+            prompt = f"""Du bist der RÜKO AI-Assistent. Formuliere eine natürliche, ausführliche Antwort
+basierend auf den Datenbankdaten.
+
+FRAGE: {query}
+
+ABFRAGETYP: {query_type}
+
+DATENBANK-ERGEBNISSE ({result_count} Datensätze):
+{structured_data}
+
+ANWEISUNGEN:
+1. Antworte in vollständigen deutschen Sätzen, nicht nur mit Zahlen
+2. Bei Zählungen: "Wir haben X Geräte im Bestand" statt nur "X"
+3. Bei Vergleichen: Erkläre die Unterschiede ausführlich
+4. Bei Listen: Fasse die wichtigsten Ergebnisse zusammen und nenne konkrete Beispiele
+5. Füge relevante Details wie Hersteller, Gewicht, Leistung hinzu wenn verfügbar
+6. Strukturiere die Antwort übersichtlich mit Absätzen oder Aufzählungen
+7. Wenn keine Ergebnisse: Erkläre was gesucht wurde und dass nichts gefunden wurde
+
+Antworte jetzt ausführlich und hilfreich:"""
+
+            response_params = {
+                "model": self.model,
+                "input": [
+                    {"role": "user", "content": prompt}
+                ],
+                "max_output_tokens": 2000
+            }
+
+            # Add reasoning for supported models
+            if (self.reasoning_effort and
+                self.reasoning_effort.lower() != "none" and
+                model_supports_reasoning(self.model)):
+                response_params["reasoning"] = {"effort": self.reasoning_effort}
+
+            response = await self.client.responses.create(**response_params)
+            return response.output_text.strip() if response.output_text else structured_data
+
+        except Exception as e:
+            print(f"[RAG] Natural response generation failed: {e}")
+            # Fall back to structured data if LLM fails
+            return structured_data
+
     async def search_and_generate(
         self,
         query: str,
@@ -314,6 +369,14 @@ class RAGSearch:
 
                 # PostgreSQL handled the query completely
                 if hybrid_result.source == "postgres" and hybrid_result.answer:
+                    # Generate natural language response from structured data
+                    natural_response = await self._generate_natural_response(
+                        query=query,
+                        structured_data=hybrid_result.answer,
+                        query_type=hybrid_result.query_type.value,
+                        raw_results=hybrid_result.raw_results
+                    )
+
                     # Add supplementary web search for non-aggregation queries
                     web_context = ""
                     web_sources = []
@@ -325,7 +388,7 @@ class RAGSearch:
                             web_sources = [{"title": r.get("title"), "source_file": r.get("url"), "score": r.get("score", 0), "namespace": "web"} for r in web_results]
 
                     return {
-                        "response": hybrid_result.answer + web_context,
+                        "response": natural_response + web_context,
                         "sources": [{"title": "PostgreSQL", "source_file": "database", "score": hybrid_result.confidence, "namespace": "postgres"}] + web_sources,
                         "chunks_used": len(hybrid_result.raw_results or []),
                         "response_id": None,
