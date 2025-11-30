@@ -97,11 +97,16 @@ SCHEMA:
 
 KLASSIFIKATION:
 1. AGGREGATION - Statistik (Anzahl, Durchschnitt, Max/Min)
-2. FILTER - Liste mit Schema-Kriterien
-3. SEMANTIC - Abstrakte Konzepte, Empfehlungen
+2. FILTER - Liste mit NUR Schema-Kriterien (abgasstufe_eu, gewicht_kg, klimaanlage, hersteller)
+3. SEMANTIC - Abstrakte Konzepte, Empfehlungen, ODER Kriterien die NICHT im Schema sind
 4. LOOKUP - Spezifisches Gerät per ID/Name
 5. COMPARISON - Vergleich
 6. HYBRID - Schema-Filter + Semantik
+
+WICHTIG für SEMANTIC:
+- Bio-Hydrauliköl, Umweltauflagen, Naturschutz → SEMANTIC (nicht im Schema!)
+- Szenario-Fragen (Baustelle beschrieben) → SEMANTIC
+- "eignet sich", "empfehlen", "beste Maschine für" → SEMANTIC
 
 DISPLAY_FIELDS - Welche Felder sind RELEVANT für die Antwort?
 Wähle NUR Felder die zur Anfrage passen:
@@ -158,24 +163,28 @@ WICHTIGE REGELN:
    ORDER BY (eigenschaften_json->>'motor_leistung_kw')::numeric DESC
    LIMIT 1
 
-4. Schwerster/Leichtester = gewicht_kg sortieren:
-   SELECT *, eigenschaften_json->>'gewicht_kg' as gewicht_kg
-   FROM geraete
-   WHERE eigenschaften_json->>'gewicht_kg' ~ '^[0-9.]+$'
-   ORDER BY (eigenschaften_json->>'gewicht_kg')::numeric DESC  -- oder ASC für leichteste
-   LIMIT 1
+4. Multi-Part Fragen (z.B. "schwerste UND leichteste") - UNION ALL verwenden:
+   (SELECT 'Schwerste Maschine' as typ, hersteller, bezeichnung, geraetegruppe,
+           eigenschaften_json->>'gewicht_kg' as gewicht_kg
+    FROM geraete WHERE eigenschaften_json->>'gewicht_kg' ~ '^[0-9.]+$'
+    ORDER BY (eigenschaften_json->>'gewicht_kg')::numeric DESC LIMIT 1)
+   UNION ALL
+   (SELECT 'Leichtester Bagger' as typ, hersteller, bezeichnung, geraetegruppe,
+           eigenschaften_json->>'gewicht_kg' as gewicht_kg
+    FROM geraete WHERE geraetegruppe ILIKE '%bagger%'
+      AND eigenschaften_json->>'gewicht_kg' ~ '^[0-9.]+$'
+    ORDER BY (eigenschaften_json->>'gewicht_kg')::numeric ASC LIMIT 1)
 
-5. Vergleich (Durchschnitt) - IMMER AVG verwenden für "schwerer" Fragen:
-   SELECT geraetegruppe,
-          COUNT(*) as anzahl,
+5. Vergleich - Zeige TOTAL Anzahl UND Durchschnittsgewicht:
+   SELECT g.geraetegruppe,
+          (SELECT COUNT(*) FROM geraete WHERE geraetegruppe = g.geraetegruppe) as anzahl,
           ROUND(AVG((eigenschaften_json->>'gewicht_kg')::numeric)) as avg_gewicht
-   FROM geraete
-   WHERE geraetegruppe IN ('Kettenbagger', 'Mobilbagger')
-     AND eigenschaften_json->>'gewicht_kg' ~ '^[0-9.]+$'
-   GROUP BY geraetegruppe
+   FROM geraete g
+   WHERE g.geraetegruppe IN ('Kettenbagger', 'Mobilbagger')
+     AND g.eigenschaften_json->>'gewicht_kg' ~ '^[0-9.]+$'
+   GROUP BY g.geraetegruppe
 
-6. Multi-Fragen: Wenn nach MEHREREN Dingen gefragt wird (z.B. "Liebherr UND Caterpillar"),
-   EINZELNE Queries mit UNION kombinieren oder GROUP BY hersteller verwenden:
+6. Multi-Hersteller (z.B. "Liebherr UND Caterpillar"):
    SELECT hersteller, COUNT(*) as anzahl FROM geraete
    WHERE hersteller IN ('Liebherr', 'Caterpillar') GROUP BY hersteller
 
@@ -269,7 +278,9 @@ Gib NUR das SQL aus, kein Markdown."""
             sql = re.sub(r'\n?```$', '', sql)
             sql = sql.strip()
 
-            if not sql or not sql.upper().startswith('SELECT'):
+            # Validate SQL - accept SELECT or (SELECT for UNION queries
+            sql_upper = sql.upper().strip()
+            if not sql or not (sql_upper.startswith('SELECT') or sql_upper.startswith('(SELECT')):
                 print(f"[SQL] Invalid output: {sql[:50] if sql else 'empty'}")
                 return ""
 
@@ -305,10 +316,10 @@ Gib NUR das SQL aus, kein Markdown."""
             return self._format_aggregation(results[0], context.display_fields)
 
         # Check if this is a grouped aggregation (multiple rows with counts)
-        # e.g., GROUP BY hersteller with COUNT(*)
+        # e.g., GROUP BY hersteller with COUNT(*) or UNION results
         if (context.query_type == QueryType.AGGREGATION and
             len(results) > 1 and
-            any(k in results[0] for k in ['count', 'anzahl', 'avg_gewicht'])):
+            any(k in results[0] for k in ['count', 'anzahl', 'avg_gewicht', 'typ'])):
             return self._format_grouped_aggregation(results)
 
         # Comparison results (grouped data)
@@ -319,8 +330,12 @@ Gib NUR das SQL aus, kein Markdown."""
         return self._format_list(results, context.display_fields)
 
     def _format_grouped_aggregation(self, results: List[Dict]) -> str:
-        """Format grouped aggregation results (e.g., COUNT BY hersteller)"""
+        """Format grouped aggregation results (e.g., COUNT BY hersteller or UNION results)"""
         lines = []
+
+        # Check if this is a UNION result with 'typ' column (multi-part query)
+        if results and 'typ' in results[0]:
+            return self._format_union_results(results)
 
         for r in results:
             # Get the group name (could be hersteller, geraetegruppe, kategorie, etc.)
@@ -340,6 +355,36 @@ Gib NUR das SQL aus, kein Markdown."""
                     details.append(f"Ø Gewicht: {float(r['avg_gewicht']):,.0f} kg")
                 if details:
                     lines.append(f"- **{group_name}**: {', '.join(details)}")
+
+        return "\n".join(lines)
+
+    def _format_union_results(self, results: List[Dict]) -> str:
+        """Format UNION results (multi-part queries like heaviest + lightest)"""
+        lines = []
+
+        for r in results:
+            typ = r.get('typ', 'Ergebnis')
+            name = f"{r.get('hersteller', '')} {r.get('bezeichnung', '')}".strip()
+            group = r.get('geraetegruppe', '')
+
+            details = []
+            if r.get('gewicht_kg'):
+                try:
+                    weight = float(r['gewicht_kg'])
+                    details.append(f"{weight:,.0f} kg")
+                except (ValueError, TypeError):
+                    pass
+            if r.get('motor_leistung_kw'):
+                try:
+                    power = float(r['motor_leistung_kw'])
+                    details.append(f"{power:,.0f} kW")
+                except (ValueError, TypeError):
+                    pass
+            if group:
+                details.append(group)
+
+            detail_str = f" ({', '.join(details)})" if details else ""
+            lines.append(f"**{typ}:** {name}{detail_str}")
 
         return "\n".join(lines)
 
