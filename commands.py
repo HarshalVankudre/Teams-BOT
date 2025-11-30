@@ -1,28 +1,23 @@
 """
 German Commands Handler for RÜKO Teams Bot
-All commands in German, file upload pending admin approval
+Handles slash commands for document management and bot interaction.
 """
 import os
 import logging
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
-
-# Feedback service for storing user feedback
 from rag.feedback import feedback_service
 
 load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-# Initialize OpenAI client
+# Configuration
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 VECTOR_STORE_ID = os.getenv("VECTOR_STORE_ID")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
 client = AsyncOpenAI(api_key=OPENAI_API_KEY)
-
-# Conversation storage (imported from app.py)
-conversation_responses = {}
 
 
 async def handle_hochladen_command(body: dict, args: list, send_reply_func):
@@ -155,23 +150,16 @@ async def handle_suchen_command(body: dict, args: list, send_reply_func):
 
 async def handle_zurücksetzen_command(body: dict, args: list, send_reply_func):
     """Handle /zurücksetzen (reset) command"""
-    try:
-        # Get user ID
-        user_id = body.get("from", {}).get("id", "unknown")
-        conversation_id = body.get("conversation", {}).get("id", "")
-        thread_key = f"{user_id}:{conversation_id}"
+    # Note: Actual conversation reset is handled by app.py when this message is processed
+    # This command just confirms the reset to the user
+    message = """🔄 **Gesprächsverlauf wird zurückgesetzt!**
 
-        if thread_key in conversation_responses:
-            del conversation_responses[thread_key]
-            message = "🔄 **Gesprächsverlauf zurückgesetzt!**\n\nDu kannst jetzt mit einer neuen Unterhaltung beginnen."
-        else:
-            message = "ℹ️ Kein aktiver Gesprächsverlauf gefunden.\n\nDu kannst direkt mit einer neuen Frage beginnen!"
+Deine nächste Nachricht startet eine neue Unterhaltung.
 
-        await send_reply_func(body, message)
+💡 **Tipp:** Der Bot merkt sich den Kontext für 24 Stunden.
+Nach einem Reset beginnt der Bot ohne Vorwissen über frühere Fragen."""
 
-    except Exception as e:
-        logger.error(f"Error in /zurücksetzen command: {e}")
-        await send_reply_func(body, f"❌ Fehler beim Zurücksetzen: {str(e)}")
+    await send_reply_func(body, message)
 
 
 async def handle_hilfe_command(body: dict, args: list, send_reply_func):
@@ -253,7 +241,7 @@ async def handle_status_command(body: dict, args: list, send_reply_func):
 • Status: {vector_store.status}
 
 **💬 Konversationen:**
-• Aktive Gespräche: {len(conversation_responses)}
+• Kontext-Speicher: Redis (24h TTL)
 
 **✨ Funktionen:**
 • 📚 Dokumentensuche
