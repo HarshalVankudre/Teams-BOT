@@ -13,6 +13,8 @@ class EmbeddingService:
     MAX_TOKENS_PER_REQUEST = 250000
     # Approximate chars per token (conservative estimate)
     CHARS_PER_TOKEN = 3
+    # Max texts per batch (OpenAI limit is 2048, use 100 for reliability)
+    MAX_TEXTS_PER_BATCH = 100
 
     def __init__(self):
         self.client = AsyncOpenAI(api_key=config.openai_api_key)
@@ -52,8 +54,9 @@ class EmbeddingService:
                 text = text[:max_chars]
                 text_tokens = self._estimate_tokens(text)
 
-            # If adding this text would exceed limit, start new batch
-            if current_tokens + text_tokens > self.MAX_TOKENS_PER_REQUEST:
+            # If adding this text would exceed token limit OR batch size limit, start new batch
+            if (current_tokens + text_tokens > self.MAX_TOKENS_PER_REQUEST or
+                len(current_batch) >= self.MAX_TEXTS_PER_BATCH):
                 if current_batch:
                     batches.append(current_batch)
                 current_batch = [text]

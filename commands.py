@@ -7,6 +7,9 @@ import logging
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
 
+# Feedback service for storing user feedback
+from rag.feedback import feedback_service
+
 load_dotenv()
 
 logger = logging.getLogger(__name__)
@@ -199,6 +202,10 @@ async def handle_hilfe_command(body: dict, args: list, send_reply_func):
   Gesprächsverlauf zurücksetzen
   Startet eine neue Konversation
 
+• **/feedback <text>** 💬
+  Feedback zur letzten Antwort geben
+  Beispiel: `/feedback Sehr hilfreiche Antwort!`
+
 **ℹ️ Information:**
 
 • **/status** ℹ️
@@ -266,6 +273,49 @@ _Zuletzt geprüft: jetzt_
         await send_reply_func(body, f"❌ Fehler beim Abrufen des Status: {str(e)}")
 
 
+async def handle_feedback_command(body: dict, args: list, send_reply_func):
+    """Handle /feedback command - Store user feedback for their most recent conversation"""
+    # Check if feedback text was provided
+    if not args:
+        await send_reply_func(
+            body,
+            "❌ **Feedback fehlt!**\n\n"
+            "Bitte gib dein Feedback nach dem Befehl ein:\n\n"
+            "**Beispiel:** `/feedback Die Antwort war sehr hilfreich!`\n\n"
+            "💡 Dein Feedback hilft uns, den Bot zu verbessern."
+        )
+        return
+
+    # Get user ID
+    user_id = body.get("from", {}).get("id", "unknown")
+    feedback_text = " ".join(args)
+
+    try:
+        # Store feedback linked to the user's most recent conversation
+        success = feedback_service.add_feedback(user_id=user_id, feedback=feedback_text)
+
+        if success:
+            await send_reply_func(
+                body,
+                "✅ **Vielen Dank für dein Feedback!**\n\n"
+                f"📝 Dein Feedback: _{feedback_text}_\n\n"
+                "Wir schätzen deine Rückmeldung sehr. Sie hilft uns, den Bot kontinuierlich zu verbessern."
+            )
+        else:
+            await send_reply_func(
+                body,
+                "⚠️ **Feedback konnte nicht gespeichert werden.**\n\n"
+                "Mögliche Gründe:\n"
+                "• Kein vorheriges Gespräch gefunden\n"
+                "• Du hast bereits Feedback zur letzten Antwort gegeben\n\n"
+                "💡 Stelle zuerst eine Frage an den Bot und gib dann Feedback."
+            )
+
+    except Exception as e:
+        logger.error(f"Error in /feedback command: {e}")
+        await send_reply_func(body, f"❌ Fehler beim Speichern des Feedbacks: {str(e)}")
+
+
 # Command routing map
 COMMAND_HANDLERS = {
     "/hochladen": handle_hochladen_command,
@@ -275,6 +325,8 @@ COMMAND_HANDLERS = {
     "/zurücksetzen": handle_zurücksetzen_command,
     "/hilfe": handle_hilfe_command,
     "/status": handle_status_command,
+    "/feedback": handle_feedback_command,
+    "/rückmeldung": handle_feedback_command,
 }
 
 # English aliases (for compatibility)

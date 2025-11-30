@@ -1,198 +1,285 @@
 """
-RAG Search - Retrieval and Response Generation
+RAG Search - Semantic retrieval and response generation.
+Searches Pinecone for documents and machinery.
+Hybrid RAG routes structured queries to PostgreSQL via orchestrator.
 """
-import re
 import time
-from typing import List, Dict, Any, Optional, Tuple
+import json
+import os
+from typing import List, Dict, Any, Optional
 from openai import AsyncOpenAI
+import pinecone
 from .config import config
 from .vector_store import PineconeStore
+from .embeddings import EmbeddingService
+
+# Hybrid RAG with PostgreSQL
+try:
+    from .hybrid_orchestrator import HybridOrchestrator, QueryType
+    HYBRID_AVAILABLE = True
+except ImportError:
+    HYBRID_AVAILABLE = False
+    print("[WARNING] Hybrid orchestrator not available.")
+
+# Tavily for supplementary web search
+try:
+    from tavily import AsyncTavilyClient
+    TAVILY_AVAILABLE = True
+except ImportError:
+    TAVILY_AVAILABLE = False
+    print("[WARNING] tavily-python not installed. Web search disabled.")
 
 
 class RAGSearch:
     """
-    RAG Search: Retrieve relevant chunks and generate responses.
-    Uses Pinecone for retrieval and GPT-5.1 for generation.
+    RAG Search with hybrid routing.
+    PostgreSQL handles structured queries via orchestrator.
+    Pinecone handles semantic queries.
     """
 
     def __init__(self):
         self.client = AsyncOpenAI(api_key=config.openai_api_key)
         self.vector_store = PineconeStore()
-        self.model = config.response_model  # gpt-5.1 for answering
-        self.reasoning_effort = config.response_reasoning  # low reasoning
+        self.embedding_service = EmbeddingService()
 
-    def detect_identifiers(self, query: str) -> Dict[str, List[str]]:
-        """
-        Detect machine identifiers in a query for metadata filtering.
+        # Model settings from config
+        self.model = config.response_model
+        self.reasoning_effort = config.response_reasoning
 
-        Patterns detected:
-        - Serial numbers: JG002579, NG004113, 0096 V08100445X2
-        - Inventory numbers: 300582, 20205 (5-6 digit numbers)
-        - Machine types: MF 2500 CS, 300.9D, V8 X2
+        if not self.model or not self.reasoning_effort:
+            raise ValueError("OPENAI_MODEL and REASONING_EFFORT must be set in .env")
 
-        Returns:
-            Dict with lists of detected identifiers by type
-        """
-        detected = {
-            "serial_numbers": [],
-            "inventory_numbers": [],
-            "machine_names": []
-        }
+        print(f"[RAG] Model: {self.model}, Reasoning: {self.reasoning_effort}")
 
-        # Serial number patterns (letters + numbers, e.g., JG002579, NG004113)
-        serial_patterns = [
-            r'\b[A-Z]{2}\d{6}\b',  # JG002579, NG004113
-            r'\b\d{4}\s*[A-Z]\d{8}[A-Z]\d?\b',  # 0096 V08100445X2
-            r'\b[A-Z]{2,3}\d{5,7}\b',  # Broader pattern
-        ]
-        for pattern in serial_patterns:
-            matches = re.findall(pattern, query.upper())
-            detected["serial_numbers"].extend(matches)
+        # Tavily for supplementary web search
+        self.enable_web_search = config.enable_web_search and TAVILY_AVAILABLE and config.tavily_api_key
+        self.tavily_client = None
+        if self.enable_web_search:
+            self.tavily_client = AsyncTavilyClient(api_key=config.tavily_api_key)
+            print("[RAG] Tavily: Enabled")
+        else:
+            print("[RAG] Tavily: Disabled")
 
-        # Inventory numbers (5-6 digit standalone numbers)
-        inv_pattern = r'\b\d{5,6}\b'
-        inv_matches = re.findall(inv_pattern, query)
-        # Filter out years (1900-2099) and other obvious non-inventory numbers
-        for match in inv_matches:
-            if not (1900 <= int(match) <= 2099):
-                detected["inventory_numbers"].append(match)
+        # Pinecone index
+        self.pc = pinecone.Pinecone(api_key=config.pinecone_api_key)
+        self.index = self.pc.Index(host=config.pinecone_host)
+        self.machinery_namespace = config.pinecone_machinery_namespace
+        self.documents_namespace = config.pinecone_namespace
 
-        # Machine type patterns (letters + numbers + optional suffix)
-        machine_patterns = [
-            r'\b(MF\s*\d{4}\s*[A-Z]{0,3})\b',  # MF 2500 CS
-            r'\b(\d{3}\.\d[A-Z]?)\b',  # 300.9D
-            r'\b([A-Z]\d+\s*[A-Z]\d*)\b',  # V8 X2
-            r'\b(Big-Ski|Big Ski)\b',  # Special names
-        ]
-        for pattern in machine_patterns:
-            matches = re.findall(pattern, query, re.IGNORECASE)
-            detected["machine_names"].extend([m.strip() for m in matches if isinstance(m, str)])
+        # Hybrid orchestrator (PostgreSQL + Pinecone routing)
+        self.use_hybrid_rag = os.getenv("USE_HYBRID_RAG", "false").lower() == "true"
+        self.hybrid_orchestrator = None
+        if self.use_hybrid_rag and HYBRID_AVAILABLE:
+            try:
+                self.hybrid_orchestrator = HybridOrchestrator(
+                    openai_client=self.client,
+                    verbose=True
+                )
+                print("[RAG] Hybrid RAG: Enabled (PostgreSQL + Pinecone)")
+            except Exception as e:
+                print(f"[RAG] Hybrid RAG initialization failed: {e}")
+                self.use_hybrid_rag = False
+        else:
+            print("[RAG] Hybrid RAG: Disabled")
 
-        # Deduplicate
-        for key in detected:
-            detected[key] = list(set(detected[key]))
-
-        return detected
-
-    async def smart_search(
+    async def search_pinecone(
         self,
         query: str,
-        top_k: int = None
-    ) -> List[Dict[str, Any]]:
-        """
-        Smart hybrid search that combines:
-        1. Metadata filtering for exact identifier matches
-        2. Semantic search for concept matching
-        3. Merges and deduplicates results
-
-        Args:
-            query: The search query
-            top_k: Number of results to return
-
-        Returns:
-            Combined list of matching chunks
-        """
-        top_k = top_k or config.search_top_k
-        all_results = []
-        seen_ids = set()
-
-        # Step 1: Detect identifiers in query
-        identifiers = self.detect_identifiers(query)
-        has_identifiers = any(identifiers.values())
-
-        # Step 2: If identifiers found, do metadata filter searches first
-        if has_identifiers:
-            print(f"Detected identifiers: {identifiers}")
-
-            # Search by serial number
-            for serial in identifiers["serial_numbers"]:
-                filter_results = await self.vector_store.search(
-                    query=query,
-                    top_k=5,
-                    filters={"serial_number": {"$eq": serial}}
-                )
-                for r in filter_results:
-                    if r.get("id") not in seen_ids:
-                        r["match_type"] = "serial_number_exact"
-                        all_results.append(r)
-                        seen_ids.add(r.get("id"))
-
-            # Search by inventory number
-            for inv in identifiers["inventory_numbers"]:
-                filter_results = await self.vector_store.search(
-                    query=query,
-                    top_k=5,
-                    filters={"inventory_number": {"$eq": inv}}
-                )
-                for r in filter_results:
-                    if r.get("id") not in seen_ids:
-                        r["match_type"] = "inventory_number_exact"
-                        all_results.append(r)
-                        seen_ids.add(r.get("id"))
-
-            # Search by machine name (partial match via semantic, but boost exact)
-            for name in identifiers["machine_names"]:
-                filter_results = await self.vector_store.search(
-                    query=name,  # Search specifically for this name
-                    top_k=5,
-                    filters=None  # Semantic search for machine name
-                )
-                for r in filter_results:
-                    if r.get("id") not in seen_ids:
-                        r["match_type"] = "machine_name_semantic"
-                        all_results.append(r)
-                        seen_ids.add(r.get("id"))
-
-        # Step 3: Always do semantic search as fallback/supplement
-        semantic_results = await self.vector_store.search(
-            query=query,
-            top_k=top_k,
-            filters=None
-        )
-        for r in semantic_results:
-            if r.get("id") not in seen_ids:
-                r["match_type"] = "semantic"
-                all_results.append(r)
-                seen_ids.add(r.get("id"))
-
-        # Step 4: Sort by score and return top_k
-        all_results.sort(key=lambda x: x.get("score", 0), reverse=True)
-
-        # Prioritize exact matches by boosting their position
-        exact_matches = [r for r in all_results if r.get("match_type", "").endswith("_exact")]
-        other_matches = [r for r in all_results if not r.get("match_type", "").endswith("_exact")]
-
-        # Return exact matches first, then others, limited to top_k
-        final_results = (exact_matches + other_matches)[:top_k]
-
-        if has_identifiers:
-            print(f"Hybrid search: {len(exact_matches)} exact matches, {len(other_matches)} semantic matches")
-
-        return final_results
-
-    async def search(
-        self,
-        query: str,
-        top_k: int = None,
+        top_k: int = 5,
         filters: Optional[Dict[str, Any]] = None
     ) -> List[Dict[str, Any]]:
-        """
-        Search for relevant chunks.
+        """Search both document and machinery namespaces in Pinecone"""
+        query_embedding = await self.embedding_service.embed_query(query)
 
-        Args:
-            query: The search query
-            top_k: Number of results to return
-            filters: Metadata filters
+        # Build Pinecone filter
+        pinecone_filter = None
+        if filters:
+            pinecone_filter = {}
+            for key, value in filters.items():
+                if isinstance(value, dict):
+                    pinecone_filter[key] = value
+                elif isinstance(value, list):
+                    pinecone_filter[key] = {"$in": value}
+                else:
+                    pinecone_filter[key] = {"$eq": value}
 
-        Returns:
-            List of matching chunks with scores
-        """
-        top_k = top_k or config.search_top_k
-        return await self.vector_store.search(
-            query=query,
-            top_k=top_k,
-            filters=filters
-        )
+        all_results = []
+
+        # Search documents namespace
+        try:
+            doc_results = self.index.query(
+                vector=query_embedding,
+                top_k=top_k,
+                namespace=self.documents_namespace,
+                include_metadata=True,
+                filter=pinecone_filter
+            )
+            for match in doc_results.matches:
+                all_results.append({
+                    "id": match.id,
+                    "score": match.score,
+                    "metadata": match.metadata,
+                    "namespace": "documents",
+                    "content": match.metadata.get("content", ""),
+                    "title": match.metadata.get("title", ""),
+                    "source_file": match.metadata.get("source_file", "")
+                })
+        except Exception as e:
+            print(f"[Search] Documents error: {e}")
+
+        # Search machinery namespace
+        try:
+            machinery_results = self.index.query(
+                vector=query_embedding,
+                top_k=top_k,
+                namespace=self.machinery_namespace,
+                include_metadata=True,
+                filter=pinecone_filter
+            )
+            for match in machinery_results.matches:
+                metadata = match.metadata or {}
+                all_results.append({
+                    "id": match.id,
+                    "score": match.score,
+                    "metadata": metadata,
+                    "namespace": "machinery",
+                    "content": metadata.get("inhalt", ""),
+                    "title": metadata.get("titel", ""),
+                    "source_file": "machinery-database"
+                })
+        except Exception as e:
+            print(f"[Search] Machinery error: {e}")
+
+        # Sort by score
+        all_results.sort(key=lambda x: x.get("score", 0), reverse=True)
+        return all_results
+
+    async def tavily_search(self, query: str, max_results: int = None) -> List[Dict[str, Any]]:
+        """Supplementary web search via Tavily"""
+        if not self.enable_web_search or not self.tavily_client:
+            return []
+
+        max_results = max_results or config.web_search_max_results
+
+        try:
+            response = await self.tavily_client.search(
+                query=query,
+                search_depth="basic",
+                max_results=max_results,
+                include_answer=False,
+                include_raw_content=False
+            )
+
+            return [
+                {
+                    "title": item.get("title", ""),
+                    "url": item.get("url", ""),
+                    "content": item.get("content", ""),
+                    "score": item.get("score", 0),
+                    "source": "web"
+                }
+                for item in response.get("results", [])
+            ]
+        except Exception as e:
+            print(f"[Tavily] Error: {e}")
+            return []
+
+    def _build_context(self, search_results: List[Dict], web_results: List[Dict]) -> str:
+        """Build context from search results"""
+        context_parts = []
+        sources = []
+
+        # Internal results
+        for i, result in enumerate(search_results):
+            metadata = result.get("metadata", {})
+            namespace = result.get("namespace", "documents")
+
+            if namespace == "machinery":
+                content = self._format_machinery_content(metadata)
+                title = result.get("title", f"Maschine {i + 1}")
+                source_file = "Maschinendatenbank"
+            else:
+                content = metadata.get("content", "")
+                title = metadata.get("title", f"Dokument {i + 1}")
+                source_file = metadata.get("source_file", "Unknown")
+
+            score = result.get("score", 0)
+
+            context_parts.append(f"""
+### Quelle {i + 1}: {title}
+**Herkunft:** {source_file} ({namespace})
+**Relevanz:** {score:.2%}
+
+{content}
+""")
+
+            sources.append({
+                "title": title,
+                "source_file": source_file,
+                "score": score,
+                "namespace": namespace
+            })
+
+        internal_context = "\n---\n".join(context_parts) if context_parts else ""
+
+        # Web results
+        web_context = ""
+        web_sources = []
+        if web_results:
+            web_parts = []
+            for i, result in enumerate(web_results):
+                web_parts.append(f"""
+### Web-Quelle {i + 1}: {result.get('title', 'Untitled')}
+**URL:** {result.get('url', '')}
+
+{result.get('content', '')}
+""")
+                web_sources.append({
+                    "title": result.get("title", ""),
+                    "source_file": result.get("url", ""),
+                    "score": result.get("score", 0),
+                    "namespace": "web"
+                })
+            web_context = "\n---\n".join(web_parts)
+
+        # Combine contexts
+        if internal_context and web_context:
+            full_context = f"""## INTERNE DATEN (PRIORITÄT):
+{internal_context}
+
+## ERGÄNZENDE WEB-INFORMATIONEN:
+{web_context}"""
+        elif internal_context:
+            full_context = f"""## INTERNE DATEN:
+{internal_context}"""
+        elif web_context:
+            full_context = f"""## WEB-INFORMATIONEN:
+{web_context}"""
+        else:
+            full_context = "Keine relevanten Informationen gefunden."
+
+        return full_context, sources + web_sources
+
+    def _format_machinery_content(self, metadata: Dict) -> str:
+        """Format machinery metadata as content"""
+        lines = []
+        if metadata.get("hersteller"):
+            lines.append(f"Hersteller: {metadata['hersteller']}")
+        if metadata.get("geraetegruppe"):
+            lines.append(f"Typ: {metadata['geraetegruppe']}")
+        if metadata.get("kategorie"):
+            lines.append(f"Kategorie: {metadata['kategorie']}")
+        if metadata.get("seriennummer"):
+            lines.append(f"Seriennummer: {metadata['seriennummer']}")
+        if metadata.get("inventarnummer"):
+            lines.append(f"Inventarnummer: {metadata['inventarnummer']}")
+        if metadata.get("motor_leistung_kw"):
+            lines.append(f"Motorleistung: {metadata['motor_leistung_kw']} kW")
+        if metadata.get("gewicht_kg"):
+            lines.append(f"Gewicht: {metadata['gewicht_kg']} kg")
+        if metadata.get("inhalt"):
+            lines.append(f"\n{metadata['inhalt']}")
+        return "\n".join(lines)
 
     async def search_and_generate(
         self,
@@ -203,273 +290,125 @@ class RAGSearch:
         previous_response_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        Search for relevant chunks and generate a response.
-
-        Args:
-            query: The user's question
-            top_k: Number of chunks to retrieve
-            filters: Metadata filters
-            system_instructions: Custom system prompt
-            previous_response_id: Previous response ID for conversation continuity
-
-        Returns:
-            Dictionary with response, sources, and response_id
+        Main entry point: Route query and generate response.
+        Hybrid RAG routes structured queries to PostgreSQL.
         """
         top_k = top_k or config.search_top_k
-        total_start = time.time()
+        start_time = time.time()
 
-        # Use smart hybrid search for better identifier matching
-        search_start = time.time()
-        search_results = await self.smart_search(query, top_k=top_k)
-        search_time = time.time() - search_start
-        print(f"[TIMING] Search: {search_time:.2f}s")
+        # HYBRID RAG: Route to PostgreSQL for structured queries
+        if self.use_hybrid_rag and self.hybrid_orchestrator:
+            try:
+                hybrid_result = await self.hybrid_orchestrator.query(query)
+                print(f"[Hybrid] Type: {hybrid_result.query_type.value}, Source: {hybrid_result.source}")
 
-        if not search_results:
-            return {
-                "response": "Keine relevanten Informationen in den Dokumenten gefunden.",
-                "sources": [],
-                "chunks_used": 0,
-                "response_id": None
-            }
+                # PostgreSQL handled the query completely
+                if hybrid_result.source == "postgres" and hybrid_result.answer:
+                    # Add supplementary web search for non-aggregation queries
+                    web_context = ""
+                    web_sources = []
+                    if self.enable_web_search and hybrid_result.query_type not in [QueryType.AGGREGATION, QueryType.LOOKUP]:
+                        web_results = await self.tavily_search(query, max_results=2)
+                        if web_results:
+                            web_parts = [f"- [{r.get('title', '')}]({r.get('url', '')})" for r in web_results]
+                            web_context = "\n\n**Ergänzende Web-Quellen:**\n" + "\n".join(web_parts)
+                            web_sources = [{"title": r.get("title"), "source_file": r.get("url"), "score": r.get("score", 0), "namespace": "web"} for r in web_results]
 
-        # Build context from search results
-        context_parts = []
-        sources = []
+                    return {
+                        "response": hybrid_result.answer + web_context,
+                        "sources": [{"title": "PostgreSQL", "source_file": "database", "score": hybrid_result.confidence, "namespace": "postgres"}] + web_sources,
+                        "chunks_used": len(hybrid_result.raw_results or []),
+                        "response_id": None,
+                        "web_results_used": len(web_sources),
+                        "query_type": hybrid_result.query_type.value
+                    }
 
-        for i, result in enumerate(search_results):
-            metadata = result.get("metadata", {})
-            content = metadata.get("content", "")
-            title = metadata.get("title", f"Chunk {i + 1}")
-            source_file = metadata.get("source_file", "Unknown")
-            score = result.get("score", 0)
+                # HYBRID: Apply filters to Pinecone search
+                if hybrid_result.source == "hybrid" and hybrid_result.structured_filters:
+                    pinecone_filters = {}
+                    for key, value in hybrid_result.structured_filters.items():
+                        if key == "kategorie" and value:
+                            pinecone_filters["kategorie"] = {"$eq": value.lower()}
+                        elif key == "hersteller" and value:
+                            pinecone_filters["hersteller"] = {"$eq": value}
+                        elif key == "features" and isinstance(value, list):
+                            for feature in value:
+                                pinecone_filters[feature.lower()] = {"$eq": True}
 
-            context_parts.append(f"""
-### Quelle {i + 1}: {title}
-**Datei:** {source_file}
-**Relevanz:** {score:.2%}
+                    semantic_query = hybrid_result.semantic_query or query
+                    filters = pinecone_filters if pinecone_filters else filters
 
-{content}
-""")
+            except Exception as e:
+                print(f"[Hybrid] Error: {e}")
 
-            sources.append({
-                "title": title,
-                "source_file": source_file,
-                "score": score,
-                "category": metadata.get("category", ""),
-                "chunk_id": result.get("id", "")
-            })
+        # Semantic search via Pinecone
+        search_results = await self.search_pinecone(query, top_k=top_k, filters=filters)
 
-        context = "\n---\n".join(context_parts)
+        # Supplementary web search
+        web_results = []
+        if self.enable_web_search:
+            web_results = await self.tavily_search(query)
 
-        # Default system instructions
+        # Build context
+        full_context, all_sources = self._build_context(search_results, web_results)
+
+        # Generate response
         if not system_instructions:
-            system_instructions = """Du bist ein präziser Dokumentenassistent.
+            system_instructions = """Du bist der RÜKO AI-Assistent mit Zugriff auf interne Datenbanken.
+
+PRIORITÄT: Interne Daten immer zuerst, Web-Informationen nur ergänzend.
 
 REGELN:
-1. Beantworte Fragen NUR basierend auf dem bereitgestellten Kontext
-2. Zitiere die Quellen in deiner Antwort
-3. Wenn die Information nicht im Kontext ist, sage es klar
-4. Strukturiere deine Antwort übersichtlich
-5. Verwende die gleiche Sprache wie die Frage"""
+1. Zitiere Quellen: "Laut [Quelle]..."
+2. Strukturiere Antworten übersichtlich
+3. Antworte in der Sprache der Frage
 
-        # Generate response - use Responses API for reasoning models, Chat API for others
-        llm_start = time.time()
-
-        if "gpt-5" in self.model:
-            # Responses API with reasoning for gpt-5 models
-            response = await self.client.responses.create(
-                model=self.model,
-                reasoning={"effort": self.reasoning_effort},
-                input=[
-                    {"role": "system", "content": system_instructions},
-                    {"role": "user", "content": f"""Basierend auf dem folgenden Kontext, beantworte die Frage:
-
-## Kontext aus Dokumenten:
-{context}
-
-## Frage:
-{query}
-
-Beantworte die Frage und zitiere die relevanten Quellen."""}
-                ],
-                max_output_tokens=400
-            )
-            response_text = response.output_text
-            response_id = response.id
-        else:
-            # Chat Completions API for non-reasoning models
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": system_instructions},
-                    {"role": "user", "content": f"""Basierend auf dem folgenden Kontext, beantworte die Frage:
-
-## Kontext aus Dokumenten:
-{context}
-
-## Frage:
-{query}
-
-Beantworte die Frage und zitiere die relevanten Quellen."""}
-                ],
-                max_tokens=400,
-                temperature=0.3
-            )
-            response_text = response.choices[0].message.content
-            response_id = response.id
-
-        llm_time = time.time() - llm_start
-        total_time = time.time() - total_start
-        print(f"[TIMING] LLM: {llm_time:.2f}s | Total: {total_time:.2f}s")
-
-        return {
-            "response": response_text,
-            "sources": sources,
-            "chunks_used": len(search_results),
-            "response_id": response_id
-        }
-
-    async def hybrid_search(
-        self,
-        query: str,
-        top_k: int = 10,
-        categories: Optional[List[str]] = None,
-        importance_filter: Optional[str] = None
-    ) -> List[Dict[str, Any]]:
-        """
-        Hybrid search with multiple filters.
-
-        Args:
-            query: The search query
-            top_k: Number of results
-            categories: Filter by categories
-            importance_filter: Filter by importance level
-
-        Returns:
-            List of matching chunks
-        """
-        filters = {}
-
-        if categories:
-            filters["category"] = {"$in": categories}
-
-        if importance_filter:
-            filters["importance"] = {"$eq": importance_filter}
-
-        return await self.search(query, top_k=top_k, filters=filters if filters else None)
-
-    async def get_related_chunks(
-        self,
-        chunk_id: str,
-        top_k: int = 5
-    ) -> List[Dict[str, Any]]:
-        """
-        Find chunks related to a specific chunk.
-
-        This is useful for "see also" functionality.
-        """
-        # First, get the content of the source chunk
-        # Note: This requires fetching by ID which Pinecone supports via query
-        # For now, we'll use keyword matching from metadata
-
-        # This is a placeholder - in production, you'd fetch the chunk
-        # and use its embedding to find similar ones
-        return []
-
-    async def search_with_reranking(
-        self,
-        query: str,
-        initial_top_k: int = 20,
-        final_top_k: int = 5
-    ) -> List[Dict[str, Any]]:
-        """
-        Search with two-stage retrieval:
-        1. Initial broad search
-        2. Re-rank with GPT for better relevance
-
-        Args:
-            query: The search query
-            initial_top_k: Number of results for initial search
-            final_top_k: Number of results after reranking
-
-        Returns:
-            Re-ranked list of chunks
-        """
-        # Initial search
-        initial_results = await self.search(query, top_k=initial_top_k)
-
-        if not initial_results or len(initial_results) <= final_top_k:
-            return initial_results
-
-        # Prepare candidates for reranking
-        candidates = []
-        for i, result in enumerate(initial_results):
-            metadata = result.get("metadata", {})
-            candidates.append({
-                "id": i,
-                "title": metadata.get("title", ""),
-                "content": metadata.get("content", "")[:500],  # Truncate for efficiency
-                "original_score": result.get("score", 0)
-            })
-
-        # Use GPT to rerank
-        rerank_prompt = f"""Gegeben die Frage und die Kandidaten-Dokumente, ordne die Dokumente nach Relevanz.
-
-Frage: {query}
-
-Kandidaten:
-{chr(10).join([f"{c['id']}: {c['title']} - {c['content'][:200]}..." for c in candidates])}
-
-Gib die IDs der {final_top_k} relevantesten Dokumente zurück, sortiert nach Relevanz (höchste zuerst).
-Format: [id1, id2, id3, ...]
-Nur die JSON-Liste, keine Erklärung."""
+Bei fehlenden internen Daten: "In den internen Datenbanken wurde nichts gefunden." """
 
         try:
-            # Build rerank params - only include reasoning for gpt-5 models
-            rerank_params = {
+            response_params = {
                 "model": self.model,
-                "input": rerank_prompt,
-                "max_output_tokens": 100
+                "input": [
+                    {"role": "system", "content": system_instructions},
+                    {"role": "user", "content": f"""Beantworte basierend auf dem Kontext:
+
+{full_context}
+
+Frage: {query}"""}
+                ],
+                "max_output_tokens": 4000
             }
-            if "gpt-5" in self.model:
-                rerank_params["reasoning"] = {"effort": "low"}
 
-            response = await self.client.responses.create(**rerank_params)
+            if self.reasoning_effort and self.reasoning_effort.lower() != "none":
+                response_params["reasoning"] = {"effort": self.reasoning_effort}
 
-            # Parse the response
-            import json
-            ranked_ids = json.loads(response.output_text)
+            if previous_response_id:
+                response_params["previous_response_id"] = previous_response_id
+                response_params["store"] = True
 
-            # Return reranked results
-            reranked = []
-            for rank, idx in enumerate(ranked_ids[:final_top_k]):
-                if idx < len(initial_results):
-                    result = initial_results[idx].copy()
-                    result["rerank_position"] = rank + 1
-                    reranked.append(result)
+            response = await self.client.responses.create(**response_params)
 
-            return reranked
+            print(f"[RAG] Response generated in {time.time() - start_time:.2f}s")
+
+            return {
+                "response": response.output_text,
+                "sources": all_sources,
+                "chunks_used": len(search_results),
+                "response_id": response.id,
+                "web_results_used": len(web_results)
+            }
 
         except Exception as e:
-            print(f"Reranking failed: {e}, returning original results")
-            return initial_results[:final_top_k]
+            print(f"[RAG] Error: {e}")
+            return {
+                "response": f"Fehler: {str(e)}",
+                "sources": all_sources,
+                "chunks_used": len(search_results),
+                "response_id": None,
+                "web_results_used": len(web_results)
+            }
 
-    def format_sources_for_display(
-        self,
-        sources: List[Dict[str, Any]],
-        max_sources: int = 5
-    ) -> str:
-        """Format sources for display in Teams message"""
-        if not sources:
-            return ""
-
-        lines = ["\n\n---\n**Quellen:**"]
-        for i, source in enumerate(sources[:max_sources]):
-            score_pct = source.get("score", 0) * 100
-            lines.append(
-                f"- {source.get('title', 'Unbekannt')} "
-                f"({source.get('source_file', '')}) "
-                f"[{score_pct:.0f}%]"
-            )
-
-        return "\n".join(lines)
+    async def search(self, query: str, top_k: int = None, filters: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+        """Simple search interface for backward compatibility"""
+        top_k = top_k or config.search_top_k
+        return await self.search_pinecone(query, top_k=top_k, filters=filters)
