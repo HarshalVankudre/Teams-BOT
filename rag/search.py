@@ -388,8 +388,8 @@ Antworte jetzt:"""
                 hybrid_result = await self.hybrid_orchestrator.query(query)
                 print(f"[Hybrid] Type: {hybrid_result.query_type.value}, Source: {hybrid_result.source}")
 
-                # PostgreSQL handled the query completely
-                if hybrid_result.source == "postgres" and hybrid_result.answer:
+                # PostgreSQL handled the query with ACTUAL results
+                if hybrid_result.source == "postgres" and hybrid_result.raw_results:
                     # Generate natural language response from structured data
                     natural_response = await self._generate_natural_response(
                         query=query,
@@ -410,6 +410,10 @@ Antworte jetzt:"""
                         "web_results_used": len(web_sources),
                         "query_type": hybrid_result.query_type.value
                     }
+
+                # PostgreSQL returned empty - fall through to Pinecone
+                if hybrid_result.source == "postgres" and not hybrid_result.raw_results:
+                    print(f"[Hybrid] PostgreSQL returned empty, falling back to Pinecone")
 
                 # HYBRID: Apply filters to Pinecone search
                 if hybrid_result.source == "hybrid" and hybrid_result.structured_filters:
