@@ -10,6 +10,16 @@ from typing import List, Dict, Any, Optional
 from openai import AsyncOpenAI
 import pinecone
 from .config import config
+
+
+def model_supports_reasoning(model_name: str) -> bool:
+    """Check if a model supports the reasoning.effort parameter.
+    Only OpenAI's o-series models (o1, o3, etc.) support reasoning."""
+    if not model_name:
+        return False
+    model_lower = model_name.lower()
+    # o1, o1-mini, o1-pro, o3, o3-mini etc. support reasoning
+    return model_lower.startswith('o1') or model_lower.startswith('o3')
 from .vector_store import PineconeStore
 from .embeddings import EmbeddingService
 
@@ -379,7 +389,10 @@ Frage: {query}"""}
                 "max_output_tokens": 4000
             }
 
-            if self.reasoning_effort and self.reasoning_effort.lower() != "none":
+            # Only add reasoning parameter for models that support it (o1, o3 series)
+            if (self.reasoning_effort and
+                self.reasoning_effort.lower() != "none" and
+                model_supports_reasoning(self.model)):
                 response_params["reasoning"] = {"effort": self.reasoning_effort}
 
             if previous_response_id:
