@@ -321,7 +321,6 @@ ANWEISUNGEN:
 WICHTIG - Bei vielen Ergebnissen (mehr als 5):
 - Zeige nur die TOP 3 relevantesten Ergebnisse mit Details (Hersteller, Modell, Gewicht, Leistung)
 - Dann schreibe: "...und X weitere Ergebnisse"
-- Biete an, die Suche einzugrenzen (z.B. nach Hersteller, Gewicht, Typ)
 - NICHT alle Ergebnisse einzeln auflisten!
 
 Bei wenigen Ergebnissen (5 oder weniger):
@@ -329,6 +328,17 @@ Bei wenigen Ergebnissen (5 oder weniger):
 
 4. Strukturiere die Antwort übersichtlich und kompakt
 5. Wenn keine Ergebnisse: Erkläre was gesucht wurde und dass nichts gefunden wurde
+
+WICHTIG - Am Ende JEDER Antwort füge einen Abschnitt "💡 **Weiterführende Optionen:**" hinzu mit:
+- 2-3 passende Folgefragen die der Nutzer stellen könnte (als Aufzählung)
+- Filter-Vorschläge wenn relevant (z.B. "Nach Hersteller filtern", "Nur Geräte über 10t")
+- "Mehr Details anzeigen" wenn es weitere Ergebnisse gibt
+
+Beispiel:
+💡 **Weiterführende Optionen:**
+• "Zeige mir nur die Liebherr Bagger"
+• "Welche davon haben über 100 kW Leistung?"
+• "Mehr Ergebnisse anzeigen"
 
 Antworte jetzt:"""
 
