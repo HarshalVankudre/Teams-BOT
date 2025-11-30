@@ -292,6 +292,40 @@ Gib NUR das SQL aus, kein Markdown."""
                 ORDER BY avg_gewicht DESC
                 LIMIT 20"""
 
+        # Lookup: specific machine model (e.g., "Caterpillar 320")
+        if context.query_type == QueryType.LOOKUP:
+            # Extract manufacturer and model from query
+            manufacturers = ['caterpillar', 'liebherr', 'bomag', 'vögele', 'hamm', 'wirtgen',
+                           'kubota', 'volvo', 'dynapac', 'wacker', 'atlas', 'hitachi', 'komatsu']
+            found_manufacturer = None
+            for m in manufacturers:
+                if m in q:
+                    found_manufacturer = m.title()
+                    break
+
+            # Extract model number (digits, possibly with letters)
+            import re
+            model_match = re.search(r'\b(\d{2,4}[A-Za-z]?(?:[-\s]?\d{0,2}[A-Za-z]?)?)\b', query)
+            model_number = model_match.group(1) if model_match else None
+
+            if found_manufacturer and model_number:
+                # Clean model number for flexible matching
+                model_clean = re.sub(r'[-\s]', '', model_number)
+                return f"""SELECT id, hersteller, bezeichnung, geraetegruppe, kategorie,
+                        seriennummer, inventarnummer,
+                        eigenschaften_json->>'gewicht_kg' as gewicht_kg,
+                        eigenschaften_json->>'motor_leistung_kw' as motor_leistung_kw,
+                        eigenschaften_json->>'grabtiefe_mm' as grabtiefe_mm,
+                        eigenschaften_json->>'reichweite_mm' as reichweite_mm,
+                        eigenschaften_json->>'klimaanlage' as klimaanlage,
+                        eigenschaften_json->>'abgasstufe_eu' as abgasstufe
+                    FROM geraete
+                    WHERE hersteller ILIKE '%{found_manufacturer}%'
+                      AND (bezeichnung ILIKE '%{model_number}%'
+                           OR bezeichnung ILIKE '%{model_clean}%'
+                           OR bezeichnung ILIKE '% {model_number[0:3]}%')
+                    LIMIT 10"""
+
         # Multi-manufacturer count
         if context.query_type == QueryType.AGGREGATION:
             manufacturers = []

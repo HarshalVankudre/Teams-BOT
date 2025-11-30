@@ -398,15 +398,9 @@ Antworte jetzt:"""
                         raw_results=hybrid_result.raw_results
                     )
 
-                    # Add supplementary web search for non-aggregation queries
+                    # No web search for structured database queries
                     web_context = ""
                     web_sources = []
-                    if self.enable_web_search and hybrid_result.query_type not in [QueryType.AGGREGATION, QueryType.LOOKUP]:
-                        web_results = await self.tavily_search(query, max_results=2)
-                        if web_results:
-                            web_parts = [f"- [{r.get('title', '')}]({r.get('url', '')})" for r in web_results]
-                            web_context = "\n\n**Ergänzende Web-Quellen:**\n" + "\n".join(web_parts)
-                            web_sources = [{"title": r.get("title"), "source_file": r.get("url"), "score": r.get("score", 0), "namespace": "web"} for r in web_results]
 
                     return {
                         "response": natural_response + web_context,
