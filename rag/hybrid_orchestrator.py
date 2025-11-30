@@ -424,15 +424,34 @@ Antworte NUR mit SQL, keine Erklärung!"""
         return ""
 
     async def execute_query(self, query: str, context: QueryContext) -> Tuple[List[Dict], str]:
-        """Execute SQL query"""
+        """Execute SQL query with fallback on empty results"""
         sql = await self.generate_sql(query, context)
         if not sql:
+            # Try fallback directly if no SQL generated
+            fallback = self._get_fallback_sql(query, context)
+            if fallback:
+                print(f"[SQL] Using fallback SQL (no primary SQL)")
+                results = self.postgres.execute_dynamic_sql(fallback)
+                if self.verbose:
+                    print(f"[SQL] Fallback: {len(results)} results")
+                return results, fallback
             return [], ""
 
         results = self.postgres.execute_dynamic_sql(sql)
 
         if self.verbose:
             print(f"[SQL] {len(results)} results")
+
+        # If no results, try fallback SQL
+        if not results:
+            fallback = self._get_fallback_sql(query, context)
+            if fallback and fallback != sql:
+                print(f"[SQL] Primary returned 0, trying fallback")
+                fallback_results = self.postgres.execute_dynamic_sql(fallback)
+                if fallback_results:
+                    if self.verbose:
+                        print(f"[SQL] Fallback: {len(fallback_results)} results")
+                    return fallback_results, fallback
 
         return results, sql
 
