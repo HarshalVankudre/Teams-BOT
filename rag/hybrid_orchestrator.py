@@ -142,43 +142,53 @@ WICHTIGE REGELN:
    Bei ALLEN numerischen Operationen (ORDER BY, AVG, Vergleiche) MUSS:
    WHERE eigenschaften_json->>'feldname' ~ '^[0-9.]+$'
 
-2. Stärkster = höchste motor_leistung_kw:
+2. WICHTIG: Bagger filtern - NICHT kategorie verwenden!
+   Viele Bagger haben kategorie=NULL. IMMER geraetegruppe verwenden:
+   WHERE geraetegruppe ILIKE '%bagger%'  -- findet Mobilbagger, Kettenbagger, Minibagger, etc.
+
+   Beispiel Bagger zählen:
+   SELECT COUNT(*) FROM geraete WHERE geraetegruppe ILIKE '%bagger%'
+
+3. Stärkster = höchste motor_leistung_kw:
    SELECT *, eigenschaften_json->>'motor_leistung_kw' as motor_leistung_kw,
           eigenschaften_json->>'gewicht_kg' as gewicht_kg
    FROM geraete
-   WHERE kategorie='bagger'
+   WHERE geraetegruppe ILIKE '%bagger%'
      AND eigenschaften_json->>'motor_leistung_kw' ~ '^[0-9.]+$'
    ORDER BY (eigenschaften_json->>'motor_leistung_kw')::numeric DESC
    LIMIT 1
 
-3. Schwerster = höchstes gewicht_kg:
+4. Schwerster/Leichtester = gewicht_kg sortieren:
    SELECT *, eigenschaften_json->>'gewicht_kg' as gewicht_kg
    FROM geraete
-   WHERE geraetegruppe ILIKE '%Typ%'
-     AND eigenschaften_json->>'gewicht_kg' ~ '^[0-9.]+$'
-   ORDER BY (eigenschaften_json->>'gewicht_kg')::numeric DESC
+   WHERE eigenschaften_json->>'gewicht_kg' ~ '^[0-9.]+$'
+   ORDER BY (eigenschaften_json->>'gewicht_kg')::numeric DESC  -- oder ASC für leichteste
    LIMIT 1
 
-4. Durchschnitt:
-   SELECT AVG((eigenschaften_json->>'gewicht_kg')::numeric) as avg_gewicht
+5. Vergleich (Durchschnitt) - IMMER AVG verwenden für "schwerer" Fragen:
+   SELECT geraetegruppe,
+          COUNT(*) as anzahl,
+          ROUND(AVG((eigenschaften_json->>'gewicht_kg')::numeric)) as avg_gewicht
    FROM geraete
-   WHERE kategorie='bagger'
+   WHERE geraetegruppe IN ('Kettenbagger', 'Mobilbagger')
      AND eigenschaften_json->>'gewicht_kg' ~ '^[0-9.]+$'
+   GROUP BY geraetegruppe
 
-5. Gerätetypen in geraetegruppe:
-   - Mobilbagger, Kettenbagger, Minibagger (für Bagger)
-   - Tandemwalze, Walzenzug (für Walzen)
+6. Multi-Fragen: Wenn nach MEHREREN Dingen gefragt wird (z.B. "Liebherr UND Caterpillar"),
+   EINZELNE Queries mit UNION kombinieren oder GROUP BY hersteller verwenden:
+   SELECT hersteller, COUNT(*) as anzahl FROM geraete
+   WHERE hersteller IN ('Liebherr', 'Caterpillar') GROUP BY hersteller
 
-6. Lookup mit Details - flexibler Match (Modellname kann Leerzeichen haben):
+7. Lookup mit Details - flexibler Match (Modellname kann Leerzeichen haben):
    SELECT *, eigenschaften_json->>'gewicht_kg' as gewicht_kg,
           eigenschaften_json->>'motor_leistung_kw' as motor_leistung_kw
    FROM geraete
    WHERE hersteller ILIKE '%Marke%'
      AND (bezeichnung ILIKE '%A920%' OR bezeichnung ILIKE '%A 920%' OR bezeichnung ILIKE '%A%920%')
 
-7. Boolean: eigenschaften_json->>'klimaanlage' = 'true'
+8. Boolean: eigenschaften_json->>'klimaanlage' = 'true'
 
-8. LIMIT: 1 für max/min, 50 für Listen
+9. LIMIT: 1 für max/min, 100 für Listen (NICHT 50!)
 
 Gib NUR das SQL aus, kein Markdown."""
 
@@ -294,12 +304,44 @@ Gib NUR das SQL aus, kein Markdown."""
         if context.query_type == QueryType.AGGREGATION and len(results) == 1:
             return self._format_aggregation(results[0], context.display_fields)
 
+        # Check if this is a grouped aggregation (multiple rows with counts)
+        # e.g., GROUP BY hersteller with COUNT(*)
+        if (context.query_type == QueryType.AGGREGATION and
+            len(results) > 1 and
+            any(k in results[0] for k in ['count', 'anzahl', 'avg_gewicht'])):
+            return self._format_grouped_aggregation(results)
+
         # Comparison results (grouped data)
         if context.query_type == QueryType.COMPARISON:
             return self._format_comparison(results)
 
         # List results
         return self._format_list(results, context.display_fields)
+
+    def _format_grouped_aggregation(self, results: List[Dict]) -> str:
+        """Format grouped aggregation results (e.g., COUNT BY hersteller)"""
+        lines = []
+
+        for r in results:
+            # Get the group name (could be hersteller, geraetegruppe, kategorie, etc.)
+            group_name = (r.get('hersteller') or r.get('geraetegruppe') or
+                         r.get('kategorie') or 'Gruppe')
+            # Clean up group name
+            group_name = re.sub(r'\s*\([0-9,]+\s*to\s*-\s*[0-9,]+\s*to\)', '', str(group_name)).strip()
+
+            # Get the count value
+            count = r.get('anzahl') or r.get('count')
+            if count is not None:
+                lines.append(f"- **{group_name}**: {count}")
+            else:
+                # Might have other aggregations
+                details = []
+                if 'avg_gewicht' in r and r['avg_gewicht']:
+                    details.append(f"Ø Gewicht: {float(r['avg_gewicht']):,.0f} kg")
+                if details:
+                    lines.append(f"- **{group_name}**: {', '.join(details)}")
+
+        return "\n".join(lines)
 
     def _format_comparison(self, results: List[Dict]) -> str:
         """Format comparison results (grouped aggregations)"""
