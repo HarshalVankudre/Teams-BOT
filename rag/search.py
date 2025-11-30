@@ -317,12 +317,20 @@ ANWEISUNGEN:
 1. Antworte in vollständigen deutschen Sätzen, nicht nur mit Zahlen
 2. Bei Zählungen: "Wir haben X Geräte im Bestand" statt nur "X"
 3. Bei Vergleichen: Erkläre die Unterschiede ausführlich
-4. Bei Listen: Fasse die wichtigsten Ergebnisse zusammen und nenne konkrete Beispiele
-5. Füge relevante Details wie Hersteller, Gewicht, Leistung hinzu wenn verfügbar
-6. Strukturiere die Antwort übersichtlich mit Absätzen oder Aufzählungen
-7. Wenn keine Ergebnisse: Erkläre was gesucht wurde und dass nichts gefunden wurde
 
-Antworte jetzt ausführlich und hilfreich:"""
+WICHTIG - Bei vielen Ergebnissen (mehr als 5):
+- Zeige nur die TOP 3 relevantesten Ergebnisse mit Details (Hersteller, Modell, Gewicht, Leistung)
+- Dann schreibe: "...und X weitere Ergebnisse"
+- Biete an, die Suche einzugrenzen (z.B. nach Hersteller, Gewicht, Typ)
+- NICHT alle Ergebnisse einzeln auflisten!
+
+Bei wenigen Ergebnissen (5 oder weniger):
+- Zeige alle Ergebnisse mit Details
+
+4. Strukturiere die Antwort übersichtlich und kompakt
+5. Wenn keine Ergebnisse: Erkläre was gesucht wurde und dass nichts gefunden wurde
+
+Antworte jetzt:"""
 
             response_params = {
                 "model": self.model,
