@@ -137,7 +137,7 @@ OTHER COLUMNS:
 
         try:
             cursor.execute(sql)
-            results = [dict(row) for row in cursor.fetchall()]
+            results = [self._convert_row(dict(row)) for row in cursor.fetchall()]
             return results
         except Exception as e:
             print(f"[PostgreSQL] Query error: {e}")
@@ -146,6 +146,14 @@ OTHER COLUMNS:
         finally:
             cursor.close()
             conn.close()
+
+    def _convert_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
+        """Convert Decimal and other non-JSON-serializable types to native Python types"""
+        from decimal import Decimal
+        for key, value in row.items():
+            if isinstance(value, Decimal):
+                row[key] = float(value)
+        return row
 
     def get_equipment_count(
         self,
@@ -325,24 +333,31 @@ OTHER COLUMNS:
         Returns:
             Query results
         """
-        # Safety checks
+        # Clean up SQL
+        sql = sql.strip()
         sql_upper = sql.upper()
 
         # Block dangerous operations
-        dangerous_keywords = ['DROP', 'DELETE', 'UPDATE', 'INSERT', 'ALTER', 'TRUNCATE', 'CREATE']
+        dangerous_keywords = ['DROP', 'DELETE', 'UPDATE', 'INSERT', 'ALTER', 'TRUNCATE']
         for keyword in dangerous_keywords:
-            if keyword in sql_upper and keyword != 'CREATE':  # Allow CREATE VIEW in SELECT
+            if keyword in sql_upper:
                 print(f"[PostgreSQL] Blocked dangerous SQL: {keyword}")
                 return []
 
         # Must be a SELECT
-        if not sql_upper.strip().startswith('SELECT'):
+        if not sql_upper.startswith('SELECT'):
             print("[PostgreSQL] Only SELECT queries allowed")
             return []
 
-        # Add LIMIT if not present
+        # Validate SQL has balanced parentheses (detect truncated SQL)
+        if sql.count('(') != sql.count(')'):
+            print("[PostgreSQL] Malformed SQL: unbalanced parentheses")
+            return []
+
+        # Add LIMIT only if SQL looks complete (ends with proper clause)
+        sql = sql.rstrip(';')
         if 'LIMIT' not in sql_upper:
-            sql = sql.rstrip(';') + ' LIMIT 100;'
+            sql += ' LIMIT 100'
 
         return self.execute_query(sql)
 

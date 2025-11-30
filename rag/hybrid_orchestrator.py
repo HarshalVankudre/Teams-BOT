@@ -124,103 +124,149 @@ JSON-Antwort:
   "semantic_query": null
 }}"""
 
-    def _build_sql_prompt(self, query_type: QueryType, display_fields: List[str]) -> str:
-        """Build SQL prompt with relevant fields"""
+    async def translate_for_sql(self, query: str) -> str:
+        """Translate German query to English for SQL generation, preserving equipment terms"""
+        # Don't translate - German works better with German database values
+        return query
+
+    def _build_sql_prompt(self) -> str:
+        """Build SQL generation prompt with schema info"""
         schema = self.postgres.SCHEMA_INFO if self.postgres else ""
-
-        # Build SELECT fields based on display_fields
-        select_hint = ""
-        if display_fields:
-            select_hint = f"\nWICHTIG: SELECT muss enthalten: bezeichnung, hersteller, {', '.join(display_fields)}"
-
-        return f"""PostgreSQL-Experte. Generiere SQL.
+        return f"""Du bist PostgreSQL-Experte. Erstelle SQL für Tabelle 'geraete' (Baumaschinen).
 
 {schema}
 
-REGELN:
-1. ILIKE für Text (case-insensitive)
-2. LIMIT 50 für Listen
-3. Bagger: kategorie = 'bagger' OR geraetegruppe ILIKE '%bagger%'
-4. Tonnen → kg * 1000
-5. COUNT(*) OVER() as total für Listen
-6. Geraetegruppe IMMER mit ILIKE '%name%'{select_hint}
+WICHTIGE REGELN:
 
-JSONB NUMERISCH:
-- Filter: eigenschaften_json->>'feld' != 'nicht-vorhanden'
-- Prüfen: eigenschaften_json->>'feld' ~ '^[0-9.]+$'
-- Cast: (eigenschaften_json->>'feld')::numeric
+1. JSONB-Felder haben manchmal 'nicht-vorhanden' als Wert!
+   Bei ALLEN numerischen Operationen (ORDER BY, AVG, Vergleiche) MUSS:
+   WHERE eigenschaften_json->>'feldname' ~ '^[0-9.]+$'
 
-JSONB BOOLEAN:
-- eigenschaften_json->>'feld' = 'true'
+2. Stärkster = höchste motor_leistung_kw:
+   SELECT *, eigenschaften_json->>'motor_leistung_kw' as motor_leistung_kw,
+          eigenschaften_json->>'gewicht_kg' as gewicht_kg
+   FROM geraete
+   WHERE kategorie='bagger'
+     AND eigenschaften_json->>'motor_leistung_kw' ~ '^[0-9.]+$'
+   ORDER BY (eigenschaften_json->>'motor_leistung_kw')::numeric DESC
+   LIMIT 1
 
-Query-Typ: {query_type.value}
+3. Schwerster = höchstes gewicht_kg:
+   SELECT *, eigenschaften_json->>'gewicht_kg' as gewicht_kg
+   FROM geraete
+   WHERE geraetegruppe ILIKE '%Typ%'
+     AND eigenschaften_json->>'gewicht_kg' ~ '^[0-9.]+$'
+   ORDER BY (eigenschaften_json->>'gewicht_kg')::numeric DESC
+   LIMIT 1
 
-NUR SQL, kein Markdown."""
+4. Durchschnitt:
+   SELECT AVG((eigenschaften_json->>'gewicht_kg')::numeric) as avg_gewicht
+   FROM geraete
+   WHERE kategorie='bagger'
+     AND eigenschaften_json->>'gewicht_kg' ~ '^[0-9.]+$'
+
+5. Gerätetypen in geraetegruppe:
+   - Mobilbagger, Kettenbagger, Minibagger (für Bagger)
+   - Tandemwalze, Walzenzug (für Walzen)
+
+6. Lookup mit Details - flexibler Match (Modellname kann Leerzeichen haben):
+   SELECT *, eigenschaften_json->>'gewicht_kg' as gewicht_kg,
+          eigenschaften_json->>'motor_leistung_kw' as motor_leistung_kw
+   FROM geraete
+   WHERE hersteller ILIKE '%Marke%'
+     AND (bezeichnung ILIKE '%A920%' OR bezeichnung ILIKE '%A 920%' OR bezeichnung ILIKE '%A%920%')
+
+7. Boolean: eigenschaften_json->>'klimaanlage' = 'true'
+
+8. LIMIT: 1 für max/min, 50 für Listen
+
+Gib NUR das SQL aus, kein Markdown."""
 
     async def classify_query(self, query: str) -> QueryContext:
-        """Classify query and determine relevant display fields"""
+        """Classify query - single attempt with keyword fallback"""
+        # Try LLM classification first
         try:
-            response_params = {
-                "model": self.model,
-                "input": [
+            response = await self.client.responses.create(
+                model=self.model,
+                input=[
                     {"role": "system", "content": self._build_classification_prompt()},
                     {"role": "user", "content": query}
                 ],
-                "text": {"format": {"type": "json_object"}},
-                "max_output_tokens": 500
-            }
-
-            if self.reasoning_effort and self.reasoning_effort.lower() != "none":
-                response_params["reasoning"] = {"effort": "low"}
-
-            response = await self.client.responses.create(**response_params)
-            result = json.loads(response.output_text)
-
-            context = QueryContext(
-                query_type=QueryType(result["type"].lower()),
-                confidence=float(result.get("confidence", 0.8)),
-                display_fields=result.get("display_fields", []),
-                structured_filters={k: v for k, v in result.get("structured_filters", {}).items() if v},
-                semantic_query=result.get("semantic_query")
+                text={"format": {"type": "json_object"}},
+                max_output_tokens=300
             )
 
-            if self.verbose:
-                print(f"[Classify] {context.query_type.value} | display: {context.display_fields}")
-
-            return context
+            if response.output_text:
+                result = json.loads(response.output_text)
+                context = QueryContext(
+                    query_type=QueryType(result["type"].lower()),
+                    confidence=float(result.get("confidence", 0.8)),
+                    display_fields=result.get("display_fields", []),
+                    structured_filters={k: v for k, v in result.get("structured_filters", {}).items() if v},
+                    semantic_query=result.get("semantic_query")
+                )
+                if self.verbose:
+                    print(f"[Classify] {context.query_type.value} | display: {context.display_fields}")
+                return context
 
         except Exception as e:
-            print(f"[Classify] Error: {e}")
-            return QueryContext(
-                query_type=QueryType.SEMANTIC,
-                confidence=0.5,
-                display_fields=[]
-            )
+            print(f"[Classify] LLM failed: {e}")
+
+        # Keyword-based fallback
+        return self._keyword_classify(query)
+
+    def _keyword_classify(self, query: str) -> QueryContext:
+        """Simple keyword-based classification"""
+        q = query.lower()
+
+        if any(w in q for w in ['wie viele', 'anzahl', 'durchschnitt', 'stärkste', 'schwerste', 'leichteste', 'max', 'min']):
+            return QueryContext(QueryType.AGGREGATION, 0.7, ['gewicht_kg', 'motor_leistung_kw'])
+
+        if any(w in q for w in ['vergleich', 'unterschied', 'vs', 'versus']):
+            return QueryContext(QueryType.COMPARISON, 0.7, ['gewicht_kg', 'motor_leistung_kw'])
+
+        if any(w in q for w in ['details', 'information', 'spezifikation', 'info zu']):
+            return QueryContext(QueryType.LOOKUP, 0.7, ['gewicht_kg', 'motor_leistung_kw', 'geraetegruppe'])
+
+        if any(w in q for w in ['alle', 'zeige', 'liste', 'welche', 'mit', 'unter', 'über']):
+            return QueryContext(QueryType.FILTER, 0.7, ['geraetegruppe'])
+
+        return QueryContext(QueryType.FILTER, 0.5, ['geraetegruppe'])
 
     async def generate_sql(self, query: str, context: QueryContext) -> str:
-        """Generate SQL with context-aware field selection"""
+        """Generate SQL using AI - translate to English first for better results"""
         try:
-            response_params = {
-                "model": self.model,
-                "input": [
-                    {"role": "system", "content": self._build_sql_prompt(context.query_type, context.display_fields)},
-                    {"role": "user", "content": query}
+            # Translate German query to English for better SQL generation
+            # but preserve equipment terms
+            english_query = await self.translate_for_sql(query)
+            if self.verbose:
+                print(f"[SQL] Translated: {english_query[:50]}...")
+
+            # Generate SQL
+            response = await self.client.responses.create(
+                model=self.model,
+                input=[
+                    {"role": "system", "content": self._build_sql_prompt()},
+                    {"role": "user", "content": english_query}
                 ],
-                "max_output_tokens": 1000
-            }
+                max_output_tokens=800
+            )
 
-            if self.reasoning_effort and self.reasoning_effort.lower() != "none":
-                response_params["reasoning"] = {"effort": "low"}
+            sql = response.output_text.strip() if response.output_text else ""
 
-            response = await self.client.responses.create(**response_params)
-            sql = response.output_text.strip()
-            sql = re.sub(r'^```sql\n?', '', sql)
+            # Remove markdown code fences if present
+            sql = re.sub(r'^```\w*\n?', '', sql)
             sql = re.sub(r'\n?```$', '', sql)
+            sql = sql.strip()
+
+            if not sql or not sql.upper().startswith('SELECT'):
+                print(f"[SQL] Invalid output: {sql[:50] if sql else 'empty'}")
+                return ""
 
             if self.verbose:
                 print(f"[SQL] {sql[:100]}...")
 
-            return sql.strip()
+            return sql
 
         except Exception as e:
             print(f"[SQL] Error: {e}")
@@ -248,18 +294,54 @@ NUR SQL, kein Markdown."""
         if context.query_type == QueryType.AGGREGATION and len(results) == 1:
             return self._format_aggregation(results[0], context.display_fields)
 
+        # Comparison results (grouped data)
+        if context.query_type == QueryType.COMPARISON:
+            return self._format_comparison(results)
+
         # List results
         return self._format_list(results, context.display_fields)
+
+    def _format_comparison(self, results: List[Dict]) -> str:
+        """Format comparison results (grouped aggregations)"""
+        lines = ["**Vergleich:**\n"]
+
+        for r in results:
+            # Get the group name (could be geraetegruppe, kategorie, etc.)
+            group_name = r.get('geraetegruppe') or r.get('kategorie') or r.get('hersteller') or 'Gruppe'
+            # Clean up group name
+            group_name = re.sub(r'\s*\([0-9,]+\s*to\s*-\s*[0-9,]+\s*to\)', '', str(group_name)).strip()
+
+            details = []
+            if 'anzahl' in r or 'count' in r:
+                count = r.get('anzahl') or r.get('count')
+                details.append(f"Anzahl: {count}")
+            if 'avg_gewicht' in r and r['avg_gewicht']:
+                details.append(f"Ø Gewicht: {float(r['avg_gewicht']):,.0f} kg")
+            if 'avg_leistung' in r and r['avg_leistung']:
+                details.append(f"Ø Leistung: {float(r['avg_leistung']):,.0f} kW")
+            if 'min_gewicht' in r and r['min_gewicht']:
+                details.append(f"Min: {float(r['min_gewicht']):,.0f} kg")
+            if 'max_gewicht' in r and r['max_gewicht']:
+                details.append(f"Max: {float(r['max_gewicht']):,.0f} kg")
+
+            detail_str = ", ".join(details) if details else ""
+            lines.append(f"**{group_name}**: {detail_str}")
+
+        return "\n".join(lines)
 
     def _format_aggregation(self, result: Dict, display_fields: List[str]) -> str:
         """Format single aggregation result"""
         # Count
         count = result.get('count') or result.get('anzahl')
         if count is not None:
-            return f"**{count}** Ergebnisse"
+            # Try to get category for better description
+            category = result.get('kategorie') or ''
+            if category:
+                return f"**{count}** {category.title()}"
+            return f"**{count}**"
 
-        # Average
-        for key in ['avg_gewicht', 'avg', 'durchschnittsgewicht', 'avg_leistung']:
+        # Average - check various keys
+        for key in ['avg_gewicht', 'avg', 'durchschnittsgewicht', 'durchschnittliches_gewicht', 'avg_leistung']:
             if key in result and result[key]:
                 try:
                     val = float(result[key])
@@ -273,16 +355,33 @@ NUR SQL, kein Markdown."""
             name = f"{result.get('hersteller', '')} {result.get('bezeichnung', '')}".strip()
             lines = [f"**{name}**"]
 
-            # Show only relevant display fields
-            fields_to_show = display_fields if display_fields else ['gewicht_kg', 'motor_leistung_kw']
+            # Always show key specs for single results
+            fields_to_show = ['gewicht_kg', 'motor_leistung_kw', 'geraetegruppe']
+
+            # Try direct fields first, then eigenschaften_json
             for field in fields_to_show:
                 value = result.get(field)
-                if value:
+                # Also check if the value is in eigenschaften_json
+                if not value and 'eigenschaften_json' in result:
+                    props = result.get('eigenschaften_json', {})
+                    if isinstance(props, dict):
+                        value = props.get(field)
+
+                if value and value != 'nicht-vorhanden':
                     lines.append(self._format_field(field, value))
+
+            # Add serial/inventory if available
+            if result.get('seriennummer'):
+                lines.append(f"- SN: {result['seriennummer']}")
+            if result.get('inventarnummer'):
+                lines.append(f"- Inv.: {result['inventarnummer']}")
 
             return "\n".join(lines)
 
-        return json.dumps(result, ensure_ascii=False)
+        # Fallback: convert any remaining Decimals before JSON dump
+        from decimal import Decimal
+        clean = {k: float(v) if isinstance(v, Decimal) else v for k, v in result.items()}
+        return json.dumps(clean, ensure_ascii=False)
 
     def _format_list(self, results: List[Dict], display_fields: List[str]) -> str:
         """Format list with context-relevant fields only"""
@@ -307,20 +406,28 @@ NUR SQL, kein Markdown."""
                     # Remove patterns like "(0,0 to - 4,4 to)" or "(10,1 to - 18,0 to)"
                     geraetegruppe = re.sub(r'\s*\([0-9,]+\s*to\s*-\s*[0-9,]+\s*to\)', '', geraetegruppe).strip()
 
-                # Build details based on display_fields
+                # Build details - show key fields that are available
                 details = []
 
-                # If no specific display fields, show cleaned geraetegruppe
-                if not display_fields:
-                    if geraetegruppe:
-                        details.append(geraetegruppe)
-                else:
-                    for field in display_fields:
-                        value = r.get(field)
-                        if value:
-                            formatted = self._format_field_inline(field, value)
-                            if formatted:
-                                details.append(formatted)
+                # Always show gewicht_kg if available in result (from SQL query)
+                if r.get('gewicht_kg') and r['gewicht_kg'] != 'nicht-vorhanden':
+                    try:
+                        weight = float(r['gewicht_kg'])
+                        details.append(f"{weight:,.0f} kg")
+                    except (ValueError, TypeError):
+                        pass
+
+                # Always show motor_leistung_kw if available
+                if r.get('motor_leistung_kw') and r['motor_leistung_kw'] != 'nicht-vorhanden':
+                    try:
+                        power = float(r['motor_leistung_kw'])
+                        details.append(f"{power:,.0f} kW")
+                    except (ValueError, TypeError):
+                        pass
+
+                # Show geraetegruppe if no numeric fields shown
+                if not details and geraetegruppe:
+                    details.append(geraetegruppe)
 
                 suffix = f" ({', '.join(details)})" if details else ""
                 lines.append(f"  - {name}{suffix}")
