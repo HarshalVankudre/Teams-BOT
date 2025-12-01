@@ -1,5 +1,6 @@
 """
-Pinecone Search Agent (Non-Reasoning Model)
+Pinecone Search SubAgent
+
 Performs semantic search in Pinecone vector store.
 Used for recommendations, conceptual queries, and document retrieval.
 """
@@ -7,13 +8,21 @@ from typing import List, Dict, Any, Optional
 import pinecone
 from openai import AsyncOpenAI
 
-from .base import BaseAgent, AgentContext, AgentResponse, AgentType
-from .registry import AgentMetadata, AgentCapability, register_agent
-from ..config import config
-from ..embeddings import EmbeddingService
+from .interface import (
+    SubAgentBase,
+    tool,
+    register_subagent,
+    AgentMetadata,
+    AgentCapability,
+    AgentContext,
+    AgentResponse,
+    AgentType
+)
+from ...config import config
+from ...embeddings import EmbeddingService
 
 
-# Agent metadata for registration
+# Agent metadata
 PINECONE_AGENT_METADATA = AgentMetadata(
     agent_id="pinecone",
     name="Pinecone Semantic Search Agent",
@@ -53,12 +62,14 @@ Verwende diesen Agenten für:
 )
 
 
-@register_agent(PINECONE_AGENT_METADATA)
-class PineconeSearchAgent(BaseAgent):
+@register_subagent()
+class PineconeSearchAgent(SubAgentBase):
     """
     Performs semantic search across Pinecone namespaces.
     Searches both machinery data and company documents.
     """
+
+    METADATA = PINECONE_AGENT_METADATA
 
     def __init__(
         self,
@@ -82,6 +93,91 @@ class PineconeSearchAgent(BaseAgent):
 
         # Search configuration
         self.default_top_k = config.search_top_k
+
+    # ==================== TOOLS ====================
+
+    @tool(
+        name="search_machinery",
+        description="Search machinery database for similar equipment",
+        parameters={
+            "query": {"type": "string", "description": "Search query"},
+            "top_k": {"type": "integer", "description": "Number of results (default: 5)"}
+        },
+        required=["query"]
+    )
+    async def search_machinery_tool(self, query: str, top_k: int = 5) -> Dict[str, Any]:
+        """Search the machinery namespace"""
+        try:
+            query_embedding = await self.embedding_service.embed_query(query)
+            results = await self._search_namespace(
+                query_embedding,
+                self.machinery_namespace,
+                top_k
+            )
+            return {"success": True, "results": results, "count": len(results)}
+        except Exception as e:
+            return {"success": False, "error": str(e), "results": [], "count": 0}
+
+    @tool(
+        name="search_documents",
+        description="Search company documents and policies",
+        parameters={
+            "query": {"type": "string", "description": "Search query"},
+            "top_k": {"type": "integer", "description": "Number of results (default: 5)"}
+        },
+        required=["query"]
+    )
+    async def search_documents_tool(self, query: str, top_k: int = 5) -> Dict[str, Any]:
+        """Search the documents namespace"""
+        try:
+            query_embedding = await self.embedding_service.embed_query(query)
+            results = await self._search_namespace(
+                query_embedding,
+                self.documents_namespace,
+                top_k
+            )
+            return {"success": True, "results": results, "count": len(results)}
+        except Exception as e:
+            return {"success": False, "error": str(e), "results": [], "count": 0}
+
+    @tool(
+        name="find_similar",
+        description="Find items similar to a given equipment ID",
+        parameters={
+            "equipment_id": {"type": "string", "description": "ID of the equipment to find similar items for"},
+            "top_k": {"type": "integer", "description": "Number of similar items (default: 5)"}
+        },
+        required=["equipment_id"]
+    )
+    async def find_similar_tool(self, equipment_id: str, top_k: int = 5) -> Dict[str, Any]:
+        """Find equipment similar to a given ID"""
+        try:
+            # First, get the vector for the given ID
+            fetch_result = self.index.fetch(
+                ids=[equipment_id],
+                namespace=self.machinery_namespace
+            )
+
+            if not fetch_result.vectors or equipment_id not in fetch_result.vectors:
+                return {"success": False, "error": f"Equipment {equipment_id} not found", "results": []}
+
+            vector = fetch_result.vectors[equipment_id].values
+
+            # Search for similar
+            results = await self._search_namespace(
+                vector,
+                self.machinery_namespace,
+                top_k + 1  # Add 1 to exclude the original
+            )
+
+            # Filter out the original
+            results = [r for r in results if r.get("id") != equipment_id][:top_k]
+
+            return {"success": True, "results": results, "count": len(results)}
+        except Exception as e:
+            return {"success": False, "error": str(e), "results": [], "count": 0}
+
+    # ==================== MAIN EXECUTION ====================
 
     async def _execute(self, context: AgentContext) -> AgentResponse:
         """
@@ -291,46 +387,3 @@ class PineconeSearchAgent(BaseAgent):
             lines.append(f"\n{metadata['inhalt'][:500]}")
 
         return "\n".join(lines)
-
-
-class HybridSearchAgent(PineconeSearchAgent):
-    """
-    Extended Pinecone agent that can also query PostgreSQL for hybrid searches.
-    Useful when you need both structured and semantic results.
-    """
-
-    def __init__(
-        self,
-        openai_client: Optional[AsyncOpenAI] = None,
-        embedding_service: Optional[EmbeddingService] = None,
-        postgres_service=None,
-        verbose: bool = False
-    ):
-        super().__init__(openai_client, embedding_service, verbose)
-        from ..postgres import postgres_service as default_postgres
-        self.postgres = postgres_service or default_postgres
-
-    async def hybrid_search(
-        self,
-        context: AgentContext,
-        sql_for_filtering: str = None
-    ) -> AgentResponse:
-        """
-        Perform hybrid search: use SQL to filter, then semantic search on results.
-        """
-        # First, get IDs from PostgreSQL if filter SQL provided
-        filter_ids = None
-        if sql_for_filtering:
-            try:
-                results = self.postgres.execute_dynamic_sql(sql_for_filtering)
-                filter_ids = [r.get("id") for r in results if r.get("id")]
-                self.log(f"SQL filter returned {len(filter_ids)} IDs")
-            except Exception as e:
-                self.log(f"SQL filter failed: {e}")
-
-        # Build Pinecone filter with IDs if available
-        if filter_ids:
-            context.metadata["pinecone_filters"] = {"id": {"$in": filter_ids}}
-
-        # Perform semantic search
-        return await self._execute(context)

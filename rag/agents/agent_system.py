@@ -80,8 +80,12 @@ class AgentSystem:
 
     def _init_agents(self):
         """Initialize all agents from the registry"""
-        # Import all agent modules to trigger registration
-        from . import orchestrator, sql_agent, pinecone_agent, web_search_agent, reviewer_agent
+        # Import orchestrator and reviewer (top-level agents)
+        from . import orchestrator, reviewer_agent
+
+        # Import subagents - this triggers auto-discovery and registration
+        from .subagents import discover_agents
+        discover_agents()
 
         # Get all registered agents
         all_agents = AgentRegistry.get_all_agents()
