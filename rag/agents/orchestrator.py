@@ -3,15 +3,17 @@ Orchestrator Agent (Reasoning Model)
 Analyzes user queries, understands context, and decides which sub-agents to invoke.
 Uses a reasoning model to think through the query requirements.
 Dynamically discovers available agents from the registry.
+Supports both OpenAI and Ollama providers.
 """
 import json
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
 from openai import AsyncOpenAI
 
 from .base import BaseAgent, AgentContext, AgentResponse, AgentType
 from .registry import AgentMetadata, AgentCapability, AgentRegistry, register_agent
 from ..config import config
 from ..schema import ORCHESTRATOR_SCHEMA
+from ..providers import create_llm_client, AsyncOllamaClient
 
 
 # Agent metadata for registration
@@ -80,18 +82,31 @@ REGELN:
 
     def __init__(
         self,
-        openai_client: Optional[AsyncOpenAI] = None,
+        openai_client: Optional[Union[AsyncOpenAI, AsyncOllamaClient]] = None,
         model: Optional[str] = None,
         reasoning_effort: str = "medium",
         verbose: bool = False
     ):
         super().__init__(verbose=verbose)
         self._agent_type = AgentType.ORCHESTRATOR
-        self.client = openai_client or AsyncOpenAI(api_key=config.openai_api_key)
+
+        # Create client if not provided
+        if openai_client is not None:
+            self.client = openai_client
+        else:
+            self.client = create_llm_client(
+                provider=config.llm_provider,
+                api_key=config.openai_api_key,
+                base_url=config.ollama_base_url if config.is_ollama() else None,
+                model=config.ollama_model if config.is_ollama() else None
+            )
 
         # Use configured model or fall back to config
-        self.model = model or config.response_model
+        self.model = model or config.get_chat_model()
         self.reasoning_effort = reasoning_effort
+
+        # Detect if using Ollama
+        self._is_ollama = isinstance(self.client, AsyncOllamaClient) or config.is_ollama()
 
         # Cache for tools - regenerated when agents change
         self._cached_tools: Optional[List[Dict]] = None
@@ -131,6 +146,9 @@ REGELN:
 
     def _supports_reasoning(self) -> bool:
         """Check if the model supports reasoning parameter in responses API"""
+        # Ollama models don't use OpenAI's reasoning API
+        if self._is_ollama:
+            return False
         if not self.model:
             return False
         model_lower = self.model.lower()
@@ -140,6 +158,9 @@ REGELN:
 
     def _uses_max_completion_tokens(self) -> bool:
         """Check if model uses max_completion_tokens instead of max_tokens"""
+        # Ollama uses num_predict (handled by our client)
+        if self._is_ollama:
+            return False
         if not self.model:
             return False
         model_lower = self.model.lower()

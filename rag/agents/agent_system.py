@@ -3,16 +3,18 @@ Agent System Coordinator
 Main entry point that orchestrates all agents to process user queries.
 Handles conversation context from Redis and coordinates the multi-agent flow.
 Uses the agent registry for dynamic agent discovery.
+Supports both OpenAI and Ollama providers.
 """
 import asyncio
 import time
-from typing import Dict, Any, Optional, List, Type
+from typing import Dict, Any, Optional, List, Type, Union
 from dataclasses import dataclass, field
 from openai import AsyncOpenAI
 
 from .base import AgentContext, AgentResponse, BaseAgent
 from .registry import AgentRegistry, AgentMetadata
 from ..config import config as rag_config
+from ..providers import create_llm_client, AsyncOllamaClient
 
 
 @dataclass
@@ -53,6 +55,7 @@ class AgentSystem:
     """
     Main coordinator that orchestrates all agents.
     Dynamically discovers available agents from the registry.
+    Supports both OpenAI and Ollama providers.
 
     Flow:
     1. Load conversation context from Redis
@@ -64,16 +67,34 @@ class AgentSystem:
 
     def __init__(
         self,
-        openai_client: Optional[AsyncOpenAI] = None,
+        llm_client: Optional[Union[AsyncOpenAI, AsyncOllamaClient]] = None,
         config: Optional[AgentSystemConfig] = None,
         redis_client=None
     ):
-        self.openai_client = openai_client or AsyncOpenAI(api_key=rag_config.openai_api_key)
+        # Support both old 'openai_client' parameter name and new 'llm_client'
+        self.llm_client = llm_client
         self.config = config or AgentSystemConfig()
         self.redis_client = redis_client
 
+        # Create client if not provided
+        if self.llm_client is None:
+            self.llm_client = create_llm_client(
+                provider=rag_config.llm_provider,
+                api_key=rag_config.openai_api_key,
+                base_url=rag_config.ollama_base_url if rag_config.is_ollama() else None,
+                model=rag_config.ollama_model if rag_config.is_ollama() else None
+            )
+
+        # Backwards compatibility alias
+        self.openai_client = self.llm_client
+
         # Agent instances - dynamically populated from registry
         self._agents: Dict[str, BaseAgent] = {}
+
+        # Log provider info
+        provider_name = "Ollama" if rag_config.is_ollama() else "OpenAI"
+        model_name = rag_config.get_chat_model()
+        self._log(f"Using {provider_name} provider with model: {model_name}")
 
         # Initialize agents from registry
         self._init_agents()
@@ -553,6 +574,7 @@ def create_agent_system(
 ) -> AgentSystem:
     """
     Create an agent system with default configuration from environment.
+    Automatically uses OpenAI or Ollama based on LLM_PROVIDER setting.
 
     Args:
         verbose: Enable detailed logging (default: from config)
@@ -571,10 +593,13 @@ def create_agent_system(
     if parallel_execution is None:
         parallel_execution = rag_config.agent_parallel_execution
 
+    # Get model based on provider
+    chat_model = rag_config.get_chat_model()
+
     system_config = AgentSystemConfig(
-        orchestrator_model=rag_config.response_model,
-        sql_model=rag_config.chunking_model or "gpt-4o-mini",
-        reviewer_model=rag_config.response_model,
+        orchestrator_model=chat_model,
+        sql_model=chat_model if rag_config.is_ollama() else (rag_config.chunking_model or "gpt-4o-mini"),
+        reviewer_model=chat_model,
         orchestrator_reasoning=rag_config.response_reasoning or "medium",
         reviewer_reasoning=rag_config.response_reasoning or "medium",
         enable_web_search=enable_web_search,
@@ -582,10 +607,16 @@ def create_agent_system(
         verbose=verbose
     )
 
-    client = AsyncOpenAI(api_key=rag_config.openai_api_key)
+    # Create LLM client based on provider
+    client = create_llm_client(
+        provider=rag_config.llm_provider,
+        api_key=rag_config.openai_api_key,
+        base_url=rag_config.ollama_base_url if rag_config.is_ollama() else None,
+        model=rag_config.ollama_model if rag_config.is_ollama() else None
+    )
 
     return AgentSystem(
-        openai_client=client,
+        llm_client=client,
         config=system_config,
         redis_client=redis_client
     )

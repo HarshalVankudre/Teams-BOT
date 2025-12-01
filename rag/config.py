@@ -13,10 +13,17 @@ load_dotenv()
 class RAGConfig:
     """Configuration for the RAG pipeline - all from .env"""
 
-    # OpenAI Settings (REQUIRED - from .env)
+    # LLM Provider Settings
+    llm_provider: str = os.getenv("LLM_PROVIDER", "openai")  # "openai" or "ollama"
+
+    # OpenAI Settings (REQUIRED for embeddings, optional for chat if using Ollama)
     openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
 
-    # Model Settings (REQUIRED - from .env, no hardcoded defaults)
+    # Ollama Settings (when LLM_PROVIDER=ollama)
+    ollama_base_url: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+    ollama_model: str = os.getenv("OLLAMA_MODEL", "qwen3:14b")
+
+    # Model Settings (used when LLM_PROVIDER=openai)
     response_model: str = os.getenv("OPENAI_MODEL")  # e.g., gpt-5, gpt-4o
     response_reasoning: str = os.getenv("REASONING_EFFORT")  # none, low, medium, high
 
@@ -58,19 +65,44 @@ class RAGConfig:
     def validate(self):
         """Validate required configuration"""
         errors = []
+
+        # OpenAI API key is always required (for embeddings)
         if not self.openai_api_key:
-            errors.append("OPENAI_API_KEY is required")
-        if not self.response_model:
-            errors.append("OPENAI_MODEL is required in .env")
-        if not self.response_reasoning:
-            errors.append("REASONING_EFFORT is required in .env")
+            errors.append("OPENAI_API_KEY is required (used for embeddings)")
+
+        # Validate provider-specific settings
+        if self.llm_provider == "openai":
+            if not self.response_model:
+                errors.append("OPENAI_MODEL is required when LLM_PROVIDER=openai")
+            if not self.response_reasoning:
+                errors.append("REASONING_EFFORT is required when LLM_PROVIDER=openai")
+        elif self.llm_provider == "ollama":
+            if not self.ollama_model:
+                errors.append("OLLAMA_MODEL is required when LLM_PROVIDER=ollama")
+        else:
+            errors.append(f"Invalid LLM_PROVIDER: {self.llm_provider}. Use 'openai' or 'ollama'")
+
+        # Pinecone is always required
         if not self.pinecone_api_key:
             errors.append("PINECONE_API_KEY is required")
         if not self.pinecone_host:
             errors.append("PINECONE_HOST is required")
+
+        # Web search validation
         if self.enable_web_search and not self.tavily_api_key:
             errors.append("TAVILY_API_KEY is required when ENABLE_WEB_SEARCH=true")
+
         return errors
+
+    def get_chat_model(self) -> str:
+        """Get the chat model based on provider"""
+        if self.llm_provider == "ollama":
+            return self.ollama_model
+        return self.response_model
+
+    def is_ollama(self) -> bool:
+        """Check if using Ollama provider"""
+        return self.llm_provider.lower() == "ollama"
 
 
 # Global config instance
