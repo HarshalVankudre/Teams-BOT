@@ -1,0 +1,62 @@
+# This file specifies files that are *not* uploaded to Google Cloud
+# using gcloud. See .gcloudignore for full documentation.
+
+# Ignore git directory
+.git
+.gitignore
+
+# Ignore Python bytecode
+__pycache__
+*.py[cod]
+*$py.class
+
+# Ignore virtual environments
+venv/
+.venv/
+env/
+
+# Ignore environment files (secrets set via Cloud Run)
+.env
+.env.*
+*.env
+
+# Ignore test files and directories
+tests/
+test_*.py
+*.test.py
+*_test.py
+
+# Ignore IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Ignore build artifacts
+build/
+dist/
+*.egg-info/
+
+# Ignore docs and markdown
+*.md
+docs/
+
+# Ignore other unnecessary files
+*.log
+*.zip
+*.tar.gz
+nul
+.DS_Store
+Thumbs.db
+
+# Ignore prompt engineer directory
+prompt engineer/
+
+# Ignore scripts not needed at runtime
+scripts/
+
+# Ignore test questions
+test-questions/
+
+# Ignore integration tests
+integration/

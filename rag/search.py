@@ -1,14 +1,13 @@
 """
-RAG Search - Semantic retrieval and response generation.
-Searches Pinecone for documents and machinery.
-Hybrid RAG routes structured queries to PostgreSQL via orchestrator.
+RAG Search - Main entry point for the search pipeline.
+Routes queries through the multi-agent system or falls back to direct search.
 """
 import time
-import json
 import os
 from typing import List, Dict, Any, Optional
 from openai import AsyncOpenAI
 import pinecone
+
 from .config import config
 
 
@@ -18,39 +17,35 @@ def model_supports_reasoning(model_name: str) -> bool:
     if not model_name:
         return False
     model_lower = model_name.lower()
-    # o1, o1-mini, o1-pro, o3, o3-mini etc. support reasoning
     return model_lower.startswith('o1') or model_lower.startswith('o3')
+
+
+# Import agent system
+try:
+    from .agents import AgentSystem, create_agent_system
+    AGENT_SYSTEM_AVAILABLE = True
+except ImportError as e:
+    AGENT_SYSTEM_AVAILABLE = False
+    print(f"[WARNING] Agent system not available: {e}")
+
+# Import embeddings for fallback
 from .vector_store import PineconeStore
 from .embeddings import EmbeddingService
-
-# Hybrid RAG with PostgreSQL
-try:
-    from .hybrid_orchestrator import HybridOrchestrator, QueryType
-    HYBRID_AVAILABLE = True
-except ImportError:
-    HYBRID_AVAILABLE = False
-    print("[WARNING] Hybrid orchestrator not available.")
-
-# Tavily for supplementary web search
-try:
-    from tavily import AsyncTavilyClient
-    TAVILY_AVAILABLE = True
-except ImportError:
-    TAVILY_AVAILABLE = False
-    print("[WARNING] tavily-python not installed. Web search disabled.")
 
 
 class RAGSearch:
     """
-    RAG Search with hybrid routing.
-    PostgreSQL handles structured queries via orchestrator.
-    Pinecone handles semantic queries.
+    RAG Search with multi-agent routing.
+
+    Primary mode: Agent System (orchestrator -> sub-agents -> reviewer)
+    Fallback mode: Direct Pinecone search
     """
 
-    def __init__(self):
+    def __init__(self, redis_client=None):
         self.client = AsyncOpenAI(api_key=config.openai_api_key)
         self.vector_store = PineconeStore()
         self.embedding_service = EmbeddingService()
+        self.redis_client = redis_client
 
         # Model settings from config
         self.model = config.response_model
@@ -61,36 +56,164 @@ class RAGSearch:
 
         print(f"[RAG] Model: {self.model}, Reasoning: {self.reasoning_effort}")
 
-        # Tavily for supplementary web search
-        self.enable_web_search = config.enable_web_search and TAVILY_AVAILABLE and config.tavily_api_key
-        self.tavily_client = None
-        if self.enable_web_search:
-            self.tavily_client = AsyncTavilyClient(api_key=config.tavily_api_key)
-            print("[RAG] Tavily: Enabled")
-        else:
-            print("[RAG] Tavily: Disabled")
-
-        # Pinecone index
+        # Pinecone direct access (for fallback)
         self.pc = pinecone.Pinecone(api_key=config.pinecone_api_key)
         self.index = self.pc.Index(host=config.pinecone_host)
         self.machinery_namespace = config.pinecone_machinery_namespace
         self.documents_namespace = config.pinecone_namespace
 
-        # Hybrid orchestrator (PostgreSQL + Pinecone routing)
-        self.use_hybrid_rag = os.getenv("USE_HYBRID_RAG", "false").lower() == "true"
-        self.hybrid_orchestrator = None
-        if self.use_hybrid_rag and HYBRID_AVAILABLE:
+        # Agent System
+        self.use_agent_system = config.use_agent_system and AGENT_SYSTEM_AVAILABLE
+        self.agent_system = None
+
+        if self.use_agent_system:
             try:
-                self.hybrid_orchestrator = HybridOrchestrator(
-                    openai_client=self.client,
-                    verbose=True
+                self.agent_system = create_agent_system(
+                    verbose=config.agent_verbose,
+                    enable_web_search=config.enable_web_search,
+                    parallel_execution=config.agent_parallel_execution,
+                    redis_client=redis_client
                 )
-                print("[RAG] Hybrid RAG: Enabled (PostgreSQL + Pinecone)")
+                print("[RAG] Agent System: Enabled")
             except Exception as e:
-                print(f"[RAG] Hybrid RAG initialization failed: {e}")
-                self.use_hybrid_rag = False
+                print(f"[RAG] Agent System initialization failed: {e}")
+                self.use_agent_system = False
         else:
-            print("[RAG] Hybrid RAG: Disabled")
+            print("[RAG] Agent System: Disabled (using direct search)")
+
+    async def search_and_generate(
+        self,
+        query: str,
+        top_k: int = None,
+        filters: Optional[Dict[str, Any]] = None,
+        system_instructions: Optional[str] = None,
+        previous_response_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+        user_name: Optional[str] = None,
+        thread_key: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Main entry point: Process query through agent system or fallback.
+
+        Args:
+            query: User's question
+            top_k: Number of results (for fallback mode)
+            filters: Search filters (for fallback mode)
+            system_instructions: Custom system prompt (for fallback mode)
+            previous_response_id: For conversation continuity
+            user_id: User identifier
+            user_name: User display name
+            thread_key: Conversation thread key
+
+        Returns:
+            Dict with response, sources, and metadata
+        """
+        top_k = top_k or config.search_top_k
+        start_time = time.time()
+
+        # PRIMARY: Use Agent System
+        if self.use_agent_system and self.agent_system:
+            try:
+                result = await self.agent_system.process(
+                    user_query=query,
+                    user_id=user_id,
+                    user_name=user_name,
+                    thread_key=thread_key
+                )
+
+                print(f"[RAG] Agent System response in {result.execution_time_ms}ms")
+                print(f"[RAG] Agents used: {result.agents_used}")
+
+                return {
+                    "response": result.response,
+                    "sources": result.sources,
+                    "chunks_used": len(result.sources),
+                    "response_id": None,  # Agent system manages its own context
+                    "web_results_used": result.metadata.get("web_results_count", 0),
+                    "query_type": result.query_intent or "agent",
+                    "agents_used": result.agents_used,
+                    "execution_time_ms": result.execution_time_ms
+                }
+
+            except Exception as e:
+                print(f"[RAG] Agent System error: {e}, falling back to direct search")
+                # Fall through to direct search
+
+        # FALLBACK: Direct Pinecone search
+        return await self._fallback_search(
+            query=query,
+            top_k=top_k,
+            filters=filters,
+            system_instructions=system_instructions,
+            previous_response_id=previous_response_id
+        )
+
+    async def _fallback_search(
+        self,
+        query: str,
+        top_k: int,
+        filters: Optional[Dict[str, Any]],
+        system_instructions: Optional[str],
+        previous_response_id: Optional[str]
+    ) -> Dict[str, Any]:
+        """Fallback to direct Pinecone search without agent system"""
+        print("[RAG] Using fallback direct search...")
+
+        # Search Pinecone
+        search_results = await self.search_pinecone(query, top_k=top_k, filters=filters)
+
+        # Build context
+        full_context, all_sources = self._build_context(search_results, [])
+
+        # Generate response
+        if not system_instructions:
+            system_instructions = self._get_default_instructions()
+
+        try:
+            response_params = {
+                "model": self.model,
+                "input": [
+                    {"role": "system", "content": system_instructions},
+                    {"role": "user", "content": f"""Beantworte basierend auf dem Kontext:
+
+{full_context}
+
+Frage: {query}"""}
+                ],
+                "max_output_tokens": 2000
+            }
+
+            # Add reasoning for supported models
+            if (self.reasoning_effort and
+                self.reasoning_effort.lower() != "none" and
+                model_supports_reasoning(self.model)):
+                response_params["reasoning"] = {"effort": self.reasoning_effort}
+
+            if previous_response_id:
+                response_params["previous_response_id"] = previous_response_id
+                response_params["store"] = True
+
+            response = await self.client.responses.create(**response_params)
+
+            return {
+                "response": response.output_text,
+                "sources": all_sources,
+                "chunks_used": len(search_results),
+                "response_id": response.id,
+                "web_results_used": 0,
+                "query_type": "fallback"
+            }
+
+        except Exception as e:
+            print(f"[RAG] Fallback error: {e}")
+            return {
+                "response": f"Fehler: {str(e)}",
+                "sources": all_sources,
+                "chunks_used": len(search_results),
+                "response_id": None,
+                "web_results_used": 0,
+                "query_type": "error"
+            }
 
     async def search_pinecone(
         self,
@@ -98,7 +221,7 @@ class RAGSearch:
         top_k: int = 5,
         filters: Optional[Dict[str, Any]] = None
     ) -> List[Dict[str, Any]]:
-        """Search both document and machinery namespaces in Pinecone"""
+        """Direct Pinecone search across namespaces"""
         query_embedding = await self.embedding_service.embed_query(query)
 
         # Build Pinecone filter
@@ -164,42 +287,11 @@ class RAGSearch:
         all_results.sort(key=lambda x: x.get("score", 0), reverse=True)
         return all_results
 
-    async def tavily_search(self, query: str, max_results: int = None) -> List[Dict[str, Any]]:
-        """Supplementary web search via Tavily"""
-        if not self.enable_web_search or not self.tavily_client:
-            return []
-
-        max_results = max_results or config.web_search_max_results
-
-        try:
-            response = await self.tavily_client.search(
-                query=query,
-                search_depth="basic",
-                max_results=max_results,
-                include_answer=False,
-                include_raw_content=False
-            )
-
-            return [
-                {
-                    "title": item.get("title", ""),
-                    "url": item.get("url", ""),
-                    "content": item.get("content", ""),
-                    "score": item.get("score", 0),
-                    "source": "web"
-                }
-                for item in response.get("results", [])
-            ]
-        except Exception as e:
-            print(f"[Tavily] Error: {e}")
-            return []
-
-    def _build_context(self, search_results: List[Dict], web_results: List[Dict]) -> str:
+    def _build_context(self, search_results: List[Dict], web_results: List[Dict]) -> tuple:
         """Build context from search results"""
         context_parts = []
         sources = []
 
-        # Internal results
         for i, result in enumerate(search_results):
             metadata = result.get("metadata", {})
             namespace = result.get("namespace", "documents")
@@ -232,43 +324,13 @@ class RAGSearch:
 
         internal_context = "\n---\n".join(context_parts) if context_parts else ""
 
-        # Web results
-        web_context = ""
-        web_sources = []
-        if web_results:
-            web_parts = []
-            for i, result in enumerate(web_results):
-                web_parts.append(f"""
-### Web-Quelle {i + 1}: {result.get('title', 'Untitled')}
-**URL:** {result.get('url', '')}
-
-{result.get('content', '')}
-""")
-                web_sources.append({
-                    "title": result.get("title", ""),
-                    "source_file": result.get("url", ""),
-                    "score": result.get("score", 0),
-                    "namespace": "web"
-                })
-            web_context = "\n---\n".join(web_parts)
-
-        # Combine contexts
-        if internal_context and web_context:
-            full_context = f"""## INTERNE DATEN (PRIORITÄT):
-{internal_context}
-
-## ERGÄNZENDE WEB-INFORMATIONEN:
-{web_context}"""
-        elif internal_context:
+        if internal_context:
             full_context = f"""## INTERNE DATEN:
 {internal_context}"""
-        elif web_context:
-            full_context = f"""## WEB-INFORMATIONEN:
-{web_context}"""
         else:
             full_context = "Keine relevanten Informationen gefunden."
 
-        return full_context, sources + web_sources
+        return full_context, sources
 
     def _format_machinery_content(self, metadata: Dict) -> str:
         """Format machinery metadata as content"""
@@ -291,164 +353,11 @@ class RAGSearch:
             lines.append(f"\n{metadata['inhalt']}")
         return "\n".join(lines)
 
-    async def _generate_natural_response(
-        self,
-        query: str,
-        structured_data: str,
-        query_type: str,
-        raw_results: list = None
-    ) -> str:
-        """Generate natural language response from PostgreSQL structured data using LLM"""
-        try:
-            # Build context about the data
-            result_count = len(raw_results) if raw_results else 0
+    def _get_default_instructions(self) -> str:
+        """Get default system instructions"""
+        return """Du bist der RÜKO AI-Assistent mit Zugriff auf interne Datenbanken.
 
-            prompt = f"""Du bist der RÜKO AI-Assistent. Formuliere eine natürliche, ausführliche Antwort
-basierend auf den Datenbankdaten.
-
-FRAGE: {query}
-
-ABFRAGETYP: {query_type}
-
-DATENBANK-ERGEBNISSE ({result_count} Datensätze):
-{structured_data}
-
-ANWEISUNGEN:
-1. Antworte in vollständigen deutschen Sätzen, nicht nur mit Zahlen
-2. Bei Zählungen: "Wir haben X Geräte im Bestand" statt nur "X"
-3. Bei Vergleichen (comparison):
-   - Zeige beide Gruppen mit Anzahl, Durchschnittsgewicht und Durchschnittsleistung
-   - Erkläre die Unterschiede: "Kettenbagger sind im Durchschnitt X kg schwerer als Mobilbagger"
-   - Nenne typische Einsatzgebiete je Typ wenn sinnvoll
-
-WICHTIG - Bei vielen Ergebnissen (mehr als 5):
-- Zeige nur die TOP 3 relevantesten Ergebnisse mit Details (Hersteller, Modell, Gewicht, Leistung)
-- Dann schreibe: "...und X weitere Ergebnisse"
-- NICHT alle Ergebnisse einzeln auflisten!
-
-Bei wenigen Ergebnissen (5 oder weniger):
-- Zeige alle Ergebnisse mit Details
-
-4. Strukturiere die Antwort übersichtlich und kompakt
-5. Wenn keine Ergebnisse: Erkläre was gesucht wurde und dass nichts gefunden wurde
-
-WICHTIG - Am Ende JEDER Antwort füge einen Abschnitt "💡 **Weiterführende Optionen:**" hinzu mit:
-- 2-3 passende Folgefragen die der Nutzer stellen könnte (als Aufzählung)
-- Filter-Vorschläge wenn relevant (z.B. "Nach Hersteller filtern", "Nur Geräte über 10t")
-- "Mehr Details anzeigen" wenn es weitere Ergebnisse gibt
-
-Beispiel:
-💡 **Weiterführende Optionen:**
-• "Zeige mir nur die Liebherr Bagger"
-• "Welche davon haben über 100 kW Leistung?"
-• "Mehr Ergebnisse anzeigen"
-
-Antworte jetzt:"""
-
-            response_params = {
-                "model": self.model,
-                "input": [
-                    {"role": "user", "content": prompt}
-                ],
-                "max_output_tokens": 2000
-            }
-
-            # Add reasoning for supported models
-            if (self.reasoning_effort and
-                self.reasoning_effort.lower() != "none" and
-                model_supports_reasoning(self.model)):
-                response_params["reasoning"] = {"effort": self.reasoning_effort}
-
-            response = await self.client.responses.create(**response_params)
-            return response.output_text.strip() if response.output_text else structured_data
-
-        except Exception as e:
-            print(f"[RAG] Natural response generation failed: {e}")
-            # Fall back to structured data if LLM fails
-            return structured_data
-
-    async def search_and_generate(
-        self,
-        query: str,
-        top_k: int = None,
-        filters: Optional[Dict[str, Any]] = None,
-        system_instructions: Optional[str] = None,
-        previous_response_id: Optional[str] = None
-    ) -> Dict[str, Any]:
-        """
-        Main entry point: Route query and generate response.
-        Hybrid RAG routes structured queries to PostgreSQL.
-        """
-        top_k = top_k or config.search_top_k
-        start_time = time.time()
-
-        # HYBRID RAG: Route to PostgreSQL for structured queries
-        if self.use_hybrid_rag and self.hybrid_orchestrator:
-            try:
-                hybrid_result = await self.hybrid_orchestrator.query(query)
-                print(f"[Hybrid] Type: {hybrid_result.query_type.value}, Source: {hybrid_result.source}")
-
-                # PostgreSQL handled the query with ACTUAL results
-                if hybrid_result.source == "postgres" and hybrid_result.raw_results:
-                    # Generate natural language response from structured data
-                    natural_response = await self._generate_natural_response(
-                        query=query,
-                        structured_data=hybrid_result.answer,
-                        query_type=hybrid_result.query_type.value,
-                        raw_results=hybrid_result.raw_results
-                    )
-
-                    # No web search for structured database queries
-                    web_context = ""
-                    web_sources = []
-
-                    return {
-                        "response": natural_response + web_context,
-                        "sources": [{"title": "PostgreSQL", "source_file": "database", "score": hybrid_result.confidence, "namespace": "postgres"}] + web_sources,
-                        "chunks_used": len(hybrid_result.raw_results or []),
-                        "response_id": None,
-                        "web_results_used": len(web_sources),
-                        "query_type": hybrid_result.query_type.value
-                    }
-
-                # PostgreSQL returned empty - fall through to Pinecone
-                if hybrid_result.source == "postgres" and not hybrid_result.raw_results:
-                    print(f"[Hybrid] PostgreSQL returned empty, falling back to Pinecone")
-
-                # HYBRID: Apply filters to Pinecone search
-                if hybrid_result.source == "hybrid" and hybrid_result.structured_filters:
-                    pinecone_filters = {}
-                    for key, value in hybrid_result.structured_filters.items():
-                        if key == "kategorie" and value:
-                            pinecone_filters["kategorie"] = {"$eq": value.lower()}
-                        elif key == "hersteller" and value:
-                            pinecone_filters["hersteller"] = {"$eq": value}
-                        elif key == "features" and isinstance(value, list):
-                            for feature in value:
-                                pinecone_filters[feature.lower()] = {"$eq": True}
-
-                    semantic_query = hybrid_result.semantic_query or query
-                    filters = pinecone_filters if pinecone_filters else filters
-
-            except Exception as e:
-                print(f"[Hybrid] Error: {e}")
-
-        # Semantic search via Pinecone
-        search_results = await self.search_pinecone(query, top_k=top_k, filters=filters)
-
-        # Supplementary web search
-        web_results = []
-        if self.enable_web_search:
-            web_results = await self.tavily_search(query)
-
-        # Build context
-        full_context, all_sources = self._build_context(search_results, web_results)
-
-        # Generate response
-        if not system_instructions:
-            system_instructions = """Du bist der RÜKO AI-Assistent mit Zugriff auf interne Datenbanken.
-
-PRIORITÄT: Interne Daten immer zuerst, Web-Informationen nur ergänzend.
+PRIORITÄT: Interne Daten immer zuerst.
 
 REGELN:
 1. Zitiere Quellen: "Laut [Quelle]..."
@@ -457,53 +366,12 @@ REGELN:
 
 Bei fehlenden internen Daten: "In den internen Datenbanken wurde nichts gefunden." """
 
-        try:
-            response_params = {
-                "model": self.model,
-                "input": [
-                    {"role": "system", "content": system_instructions},
-                    {"role": "user", "content": f"""Beantworte basierend auf dem Kontext:
-
-{full_context}
-
-Frage: {query}"""}
-                ],
-                "max_output_tokens": 4000
-            }
-
-            # Only add reasoning parameter for models that support it (o1, o3 series)
-            if (self.reasoning_effort and
-                self.reasoning_effort.lower() != "none" and
-                model_supports_reasoning(self.model)):
-                response_params["reasoning"] = {"effort": self.reasoning_effort}
-
-            if previous_response_id:
-                response_params["previous_response_id"] = previous_response_id
-                response_params["store"] = True
-
-            response = await self.client.responses.create(**response_params)
-
-            print(f"[RAG] Response generated in {time.time() - start_time:.2f}s")
-
-            return {
-                "response": response.output_text,
-                "sources": all_sources,
-                "chunks_used": len(search_results),
-                "response_id": response.id,
-                "web_results_used": len(web_results)
-            }
-
-        except Exception as e:
-            print(f"[RAG] Error: {e}")
-            return {
-                "response": f"Fehler: {str(e)}",
-                "sources": all_sources,
-                "chunks_used": len(search_results),
-                "response_id": None,
-                "web_results_used": len(web_results)
-            }
-
-    async def search(self, query: str, top_k: int = None, filters: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    async def search(
+        self,
+        query: str,
+        top_k: int = None,
+        filters: Optional[Dict[str, Any]] = None
+    ) -> List[Dict[str, Any]]:
         """Simple search interface for backward compatibility"""
         top_k = top_k or config.search_top_k
         return await self.search_pinecone(query, top_k=top_k, filters=filters)
