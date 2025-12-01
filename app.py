@@ -32,6 +32,7 @@ load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 BOT_APP_ID = os.getenv("BOT_APP_ID", "")
 BOT_APP_PASSWORD = os.getenv("BOT_APP_PASSWORD", "")
+AZURE_TENANT_ID = os.getenv("AZURE_TENANT_ID", "")  # Required for single-tenant apps
 
 # Model configuration (REQUIRED - from .env, no hardcoded defaults)
 OPENAI_MODEL = os.getenv("OPENAI_MODEL")
@@ -43,9 +44,10 @@ VECTOR_STORE_ID = os.getenv("VECTOR_STORE_ID", "")
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 CONVERSATION_TTL_HOURS = int(os.getenv("CONVERSATION_TTL_HOURS", "24"))
 
-# Custom RAG configuration
+# RAG and Agent System configuration
 USE_CUSTOM_RAG = os.getenv("USE_CUSTOM_RAG", "true").lower() == "true"
-USE_HYBRID_RAG = os.getenv("USE_HYBRID_RAG", "false").lower() == "true"
+USE_AGENT_SYSTEM = os.getenv("USE_AGENT_SYSTEM", "true").lower() == "true"
+AGENT_VERBOSE = os.getenv("AGENT_VERBOSE", "false").lower() == "true"
 
 SYSTEM_INSTRUCTIONS = os.getenv("SYSTEM_INSTRUCTIONS", """Du bist der RÜKO AI-Assistent mit Zugriff auf interne Datenbanken und ergänzende Web-Suche.
 
@@ -92,15 +94,16 @@ print(f"Vector Store ID: {VECTOR_STORE_ID}")
 print(f"Redis URL: {REDIS_URL[:50]}..." if len(REDIS_URL) > 50 else f"Redis URL: {REDIS_URL}")
 print(f"Conversation TTL: {CONVERSATION_TTL_HOURS} hours")
 print(f"Custom RAG (Pinecone): {'Enabled' if USE_CUSTOM_RAG else 'Disabled'}")
-print(f"Hybrid RAG (PostgreSQL + Pinecone): {'Enabled' if USE_HYBRID_RAG else 'Disabled'}")
+print(f"Agent System: {'Enabled' if USE_AGENT_SYSTEM else 'Disabled'}")
+print(f"Agent Verbose: {'Enabled' if AGENT_VERBOSE else 'Disabled'}")
 
 # Initialize async OpenAI client for streaming
 client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
-# Initialize custom RAG search (if enabled)
-rag_search = RAGSearch() if USE_CUSTOM_RAG else None
+# Initialize custom RAG search (if enabled) - Redis client added after startup
+rag_search = None  # Initialized in lifespan after Redis is available
 if USE_CUSTOM_RAG:
-    print("Custom RAG initialized with Pinecone")
+    print("Custom RAG will be initialized with Pinecone")
 
 # Token caching for Bot Framework authentication
 @dataclass
@@ -143,6 +146,15 @@ async def lifespan(app: FastAPI):
         limits=httpx.Limits(max_keepalive_connections=20, max_connections=100)
     )
     print("[OK] HTTP client pool initialized")
+
+    # Initialize RAG search with Redis client for conversation context
+    global rag_search
+    if USE_CUSTOM_RAG:
+        redis_client = None
+        if app.state.redis_available and app.state.redis_pool:
+            redis_client = redis.Redis(connection_pool=app.state.redis_pool)
+        rag_search = RAGSearch(redis_client=redis_client)
+        print(f"[OK] RAG Search initialized (Agent System: {USE_AGENT_SYSTEM})")
 
     yield  # Application runs here
 
@@ -355,8 +367,11 @@ async def messages(request: Request):
                 start_time = time.time()
 
                 try:
-                    # Get response from OpenAI Responses API with streaming
-                    assistant_response = await get_assistant_response_streaming(request, thread_key, user_message)
+                    # Get response from Agent System
+                    assistant_response = await get_assistant_response_streaming(
+                        request, thread_key, user_message,
+                        user_id=user_id, user_name=user_name
+                    )
                 finally:
                     # Always stop typing indicator when done
                     typing_manager.stop()
@@ -366,7 +381,7 @@ async def messages(request: Request):
 
                 # Store conversation in feedback database
                 try:
-                    data_source = "hybrid_rag" if USE_HYBRID_RAG else ("custom_rag" if USE_CUSTOM_RAG else "openai_file_search")
+                    data_source = "agent_system" if USE_AGENT_SYSTEM else ("custom_rag" if USE_CUSTOM_RAG else "openai_file_search")
                     feedback_service.save_conversation(
                         user_id=user_id,
                         user_message=user_message,
@@ -480,54 +495,81 @@ class TypingIndicatorManager:
 async def get_custom_rag_response(
     request: Request,
     thread_key: str,
-    user_message: str
+    user_message: str,
+    user_id: str = None,
+    user_name: str = None
 ) -> str:
-    """Get response using custom Pinecone RAG with conversation continuity"""
-    print("Using Custom RAG (Pinecone)...")
+    """Get response using the Agent System with conversation continuity"""
+    print(f"Using Agent System (Agent System: {USE_AGENT_SYSTEM})...")
 
     try:
-        # Get previous response ID for conversation continuity
+        # Get previous response ID for conversation continuity (fallback mode)
         previous_response_id = await get_conversation_id(request, thread_key)
         if previous_response_id:
-            print(f"Continuing RAG conversation for {thread_key}")
+            print(f"Continuing conversation for {thread_key}")
 
-        # Search and generate response
+        # Search and generate response using agent system
         result = await rag_search.search_and_generate(
             query=user_message,
             system_instructions=SYSTEM_INSTRUCTIONS,
-            previous_response_id=previous_response_id
+            previous_response_id=previous_response_id,
+            user_id=user_id,
+            user_name=user_name,
+            thread_key=thread_key
         )
 
         response = result["response"]
 
-        # Store response ID for conversation continuity
+        # Log agent system info
+        agents_used = result.get("agents_used", [])
+        query_type = result.get("query_type", "unknown")
+        execution_time = result.get("execution_time_ms", 0)
+
+        if agents_used:
+            print(f"Agents used: {agents_used}")
+        print(f"Query type: {query_type}, Execution time: {execution_time}ms")
+
+        # Store response ID for conversation continuity (if using fallback)
         response_id = result.get("response_id")
         if response_id:
             await store_conversation_id(request, thread_key, response_id)
-            print(f"RAG response ID stored for {thread_key}: {response_id}")
+            print(f"Response ID stored for {thread_key}: {response_id}")
 
-        # Add sources if available
+        # Add sources if available (only for non-agent responses or minimal sources)
         sources = result.get("sources", [])
-        if sources:
+        if sources and query_type == "fallback":
             response += "\n\n---\n**Quellen:**"
             for source in sources[:3]:
-                score_pct = source.get("score", 0) * 100
+                score_pct = source.get("score", 0)
+                if isinstance(score_pct, float) and score_pct <= 1:
+                    score_pct = score_pct * 100
                 response += f"\n- {source.get('title', 'Unbekannt')} ({source.get('source_file', '')}) [{score_pct:.0f}%]"
 
-        print(f"Custom RAG response generated using {result.get('chunks_used', 0)} chunks")
+        print(f"Response generated using {result.get('chunks_used', 0)} sources")
         return response
 
     except Exception as e:
-        print(f"Custom RAG error: {e}")
-        return f"Fehler bei der Dokumentensuche: {str(e)}"
+        print(f"Agent System error: {e}")
+        import traceback
+        traceback.print_exc()
+        return f"Fehler bei der Verarbeitung: {str(e)}"
 
 
-async def get_assistant_response_streaming(request: Request, thread_key: str, user_message: str) -> str:
-    """Get response from OpenAI Responses API or Custom RAG (Pinecone)"""
+async def get_assistant_response_streaming(
+    request: Request,
+    thread_key: str,
+    user_message: str,
+    user_id: str = None,
+    user_name: str = None
+) -> str:
+    """Get response from Agent System or fallback to OpenAI Responses API"""
 
-    # Use custom RAG if enabled
+    # Use Agent System / Custom RAG if enabled
     if USE_CUSTOM_RAG and rag_search:
-        return await get_custom_rag_response(request, thread_key, user_message)
+        return await get_custom_rag_response(
+            request, thread_key, user_message,
+            user_id=user_id, user_name=user_name
+        )
 
     # Fallback to OpenAI file_search
     try:
@@ -671,7 +713,10 @@ async def get_bot_token(request: Request = None) -> str:
 
     # For SingleTenant apps, we need to authenticate against the tenant
     # but use the Bot Framework scope
-    tenant_id = "3e180d8a-c45a-4e21-a12b-bdca3ff66d19"
+    if not AZURE_TENANT_ID:
+        print("Warning: AZURE_TENANT_ID not set for single-tenant app")
+        return ""
+    tenant_id = AZURE_TENANT_ID
 
     # Use pooled HTTP client if available, otherwise create new one
     http_client = request.app.state.http_client if request and hasattr(request.app.state, 'http_client') else None
