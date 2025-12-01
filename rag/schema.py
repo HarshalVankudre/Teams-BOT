@@ -7,7 +7,8 @@ All agents and services should import from here.
 Table: geraete (Baumaschinen/Construction Equipment)
 Total Records: ~2400
 
-IMPORTANT: Many properties are now DIRECT COLUMNS, not just in eigenschaften_json!
+CRITICAL: All numeric and boolean values are stored ONLY in eigenschaften_json (JSONB)!
+The direct columns exist but are EMPTY (NULL). Always use JSONB access patterns.
 """
 
 # =============================================================================
@@ -19,8 +20,10 @@ DATABASE_SCHEMA = """
 DATENBANK-SCHEMA: Tabelle "geraete" (Baumaschinen-Inventar)
 ================================================================================
 
-WICHTIG: Die Tabelle hat sowohl direkte Spalten ALS AUCH eine JSONB-Spalte!
-Viele numerische/boolean Werte existieren als DIREKTE SPALTEN.
+KRITISCH - DATENSTRUKTUR:
+- Nur TEXT-Spalten (hersteller, geraetegruppe, etc.) haben direkte Werte
+- ALLE numerischen und boolean Werte sind NUR in eigenschaften_json (JSONB)!
+- Werte in JSONB sind TEXT-Strings: '250.0', 'true', 'false', 'nicht-vorhanden'
 
 ================================================================================
 IDENTIFIKATION (VARCHAR/TEXT)
@@ -73,13 +76,17 @@ ARRAY SPALTEN
 - geeignet_fuer: TEXT - Geeignet für (Freitext)
 
 ================================================================================
-NUMERISCHE SPALTEN (DOUBLE PRECISION) - DIREKTE SPALTEN!
+NUMERISCHE WERTE - NUR IN eigenschaften_json (JSONB)!
 ================================================================================
+
+WICHTIG: Alle numerischen Werte sind NUR in eigenschaften_json gespeichert!
+Zugriff: (eigenschaften_json->>'feldname')::numeric
+Filterung: eigenschaften_json->>'feldname' != 'nicht-vorhanden'
 
 Abmessungen & Gewicht:
 - gewicht_kg: Betriebsgewicht in kg
-- breite_mm: Breite in mm (TEXT!)
-- hoehe_mm: Höhe in mm (TEXT!)
+- breite_mm: Breite in mm
+- hoehe_mm: Höhe in mm
 - laenge_mm: Länge in mm
 
 Motor & Leistung:
@@ -93,7 +100,7 @@ Bagger-spezifisch:
 
 Walzen & Verdichter:
 - arbeitsbreite_mm: Arbeitsbreite
-- verdichtungsleistung_kg: Verdichtungsleistung (TEXT!)
+- verdichtungsleistung_kg: Verdichtungsleistung
 - steigfaehigkeit_mit_vibration__pct: Steigfähigkeit mit Vibration %
 - steigfaehigkeit_ohne_vibration__pct: Steigfähigkeit ohne Vibration %
 
@@ -128,88 +135,51 @@ Sonstige:
 - kantenschneidgeraet_stueck: Kantenschneidgerät Anzahl
 
 ================================================================================
-BOOLEAN SPALTEN - DIREKTE SPALTEN!
+BOOLEAN WERTE - NUR IN eigenschaften_json (JSONB als TEXT)!
 ================================================================================
 
+WICHTIG: Boolean-Werte sind TEXT-Strings in JSONB!
+Werte: 'true', 'false', 'nicht-vorhanden'
+Zugriff: eigenschaften_json->>'feldname' = 'true'
+NICHT: feldname = true (funktioniert NICHT!)
+
 Antrieb & Fahrwerk:
-- allradantrieb: Allradantrieb
-- allradlenkung: Allradlenkung
-- knicklenkung: Knicklenkung
-- dieselmotor: Dieselmotor
-- motor_diesel: Diesel (redundant)
-- motor_benzin: Benzinmotor
-- dieselpartikelfilter: Dieselpartikelfilter
-- elektrostarter: Elektrostarter
+- allradantrieb, allradlenkung, knicklenkung
+- dieselmotor, motor_diesel, motor_benzin
+- dieselpartikelfilter, elektrostarter
 
 Kabine & Komfort:
-- kabine: Kabine vorhanden
-- klimaanlage: Klimaanlage
-- hochfahrbare_kabine: Hochfahrbare Kabine
-- wetterschutzdach: Wetterschutzdach
+- kabine, klimaanlage, hochfahrbare_kabine, wetterschutzdach
 
 Hydraulik & Anbaugeräte:
-- hammerhydraulik: Hammerhydraulik
-- greiferhydraulik: Greiferhydraulik
-- scherenhydraulik: Scherenhydraulik
-- greiferdreheinrichtung: Greiferdreheinrichtung
-- schnellwechsler_mech_: Mechanischer Schnellwechsler
-- schnellwechsler_hydr_: Hydraulischer Schnellwechsler
-- tiltrotator: Tiltrotator
-- powertilt: PowerTilt
-- zentralschmierung: Zentralschmierung
-- bio_hydraulikoel: Bio-Hydrauliköl
+- hammerhydraulik, greiferhydraulik, scherenhydraulik
+- greiferdreheinrichtung, schnellwechsler_mech_, schnellwechsler_hydr_
+- tiltrotator, powertilt, zentralschmierung, bio_hydraulikoel
 
 Ausleger & Abstützung:
-- monoausleger: Monoausleger
-- verstellausleger: Verstellausleger
-- seitenknickausleger: Seitenknickausleger
-- teleskopausleger: Teleskopausleger
-- pratzenabstuetzung: Pratzenabstützung
-- schildabstuetzung: Schildabstützung
+- monoausleger, verstellausleger, seitenknickausleger, teleskopausleger
+- pratzenabstuetzung, schildabstuetzung
 
 Walzen & Verdichter:
-- oszillation: Oszillation
-- verdichtungsmesser: Verdichtungsmesser
-- geteilte_bandage: Geteilte Bandage
-- anbauplattenverdichter: Anbauplattenverdichter
+- oszillation, verdichtungsmesser, geteilte_bandage, anbauplattenverdichter
 
 Fertiger:
-- gas_heizung: Gasheizung
-- e_heizung: Elektrische Heizung
-- temperaturmessung_asphalt: Temperaturmessung Asphalt
-- truck_assist: Truck Assist
-- schwenkband: Schwenkband
-- splittstreuer: Splittstreuer
+- gas_heizung, e_heizung, temperaturmessung_asphalt
+- truck_assist, schwenkband, splittstreuer
 
 Fräsen:
-- absauganlage: Absauganlage
-- reversierbar: Reversierbar
+- absauganlage, reversierbar
 
 Steuerung & Elektronik:
-- vorruestung_2d_steuerung: 2D Steuerung vorbereitet
-- vorruestung_3d_steuerung: 3D Steuerung vorbereitet
-- vorruestung_navitronic: Navitronic vorbereitet
-- vorruestung_voelkel: Völkel vorbereitet
-- vm_38_schnittstelle: VM 38 Schnittstelle
-- distanzkontrolle_automatisch: Automatische Distanzkontrolle
-- asphaltmanager: Asphaltmanager
-- funkfernsteuerung: Funkfernsteuerung
-- abb_arbeitsbereichsbegrenzung: Arbeitsbereichsbegrenzung
+- vorruestung_2d_steuerung, vorruestung_3d_steuerung
+- vorruestung_navitronic, vorruestung_voelkel
+- vm_38_schnittstelle, distanzkontrolle_automatisch
+- asphaltmanager, funkfernsteuerung, abb_arbeitsbereichsbegrenzung
 
-Krane & Hebezeuge:
-- gabelaufnahme_beschickerkuebel: Gabelaufnahme Beschickerküebel
-
-Transport:
-- 1_achser, 2_achser, 3_achser, 4_achser: Achsanzahl
-- rampen_hydraulisch: Hydraulische Rampen
-- rampen_mechanisch: Mechanische Rampen
-- muldenerhoehung: Muldenerhöhung
-- muldenheizung: Muldenheizung
-
-Sonstiges:
-- schnellgang: Schnellgang
-- vor_und_ruecklauf: Vor- und Rücklauf
-- vorlauf: Vorlauf
+Krane & Transport:
+- gabelaufnahme_beschickerkuebel
+- rampen_hydraulisch, rampen_mechanisch
+- muldenerhoehung, muldenheizung, schnellgang
 
 ================================================================================
 TEXT SPALTEN (zusätzliche Eigenschaften)
@@ -275,30 +245,52 @@ SELECT hersteller, bezeichnung, geraetegruppe
 FROM geraete
 WHERE verwendung = 'Vermietung'
 
--- Bagger über 15t mit Klimaanlage (direkte Spalten!):
-SELECT hersteller, bezeichnung, gewicht_kg
+-- Bagger über 15t mit Klimaanlage (JSONB für ALLE Werte!):
+SELECT hersteller, bezeichnung,
+       (eigenschaften_json->>'gewicht_kg')::numeric as gewicht_kg
 FROM geraete
 WHERE geraetegruppe ILIKE '%bagger%'
-AND gewicht_kg > 15000
-AND klimaanlage = true
-ORDER BY gewicht_kg DESC
+AND eigenschaften_json->>'gewicht_kg' != 'nicht-vorhanden'
+AND (eigenschaften_json->>'gewicht_kg')::numeric > 15000
+AND eigenschaften_json->>'klimaanlage' = 'true'
+ORDER BY (eigenschaften_json->>'gewicht_kg')::numeric DESC
 
--- Durchschnittsgewicht nach Gerätegruppe:
-SELECT geraetegruppe, COUNT(*) as anzahl, ROUND(AVG(gewicht_kg)) as avg_gewicht
+-- Durchschnittsgewicht nach Gerätegruppe (JSONB-Zugriff!):
+SELECT geraetegruppe,
+       COUNT(*) as anzahl,
+       ROUND(AVG((eigenschaften_json->>'gewicht_kg')::numeric)) as avg_gewicht
 FROM geraete
-WHERE geraetegruppe ILIKE '%bagger%' AND gewicht_kg IS NOT NULL
+WHERE geraetegruppe ILIKE '%bagger%'
+  AND eigenschaften_json->>'gewicht_kg' IS NOT NULL
+  AND eigenschaften_json->>'gewicht_kg' != 'nicht-vorhanden'
 GROUP BY geraetegruppe
 ORDER BY anzahl DESC
 
--- Walzen mit Oszillation:
-SELECT hersteller, bezeichnung, arbeitsbreite_mm
+-- Vergleich Kettenbagger vs Mobilbagger:
+SELECT geraetegruppe,
+       COUNT(*) as anzahl,
+       ROUND(AVG((eigenschaften_json->>'gewicht_kg')::numeric)) as avg_gewicht,
+       MIN((eigenschaften_json->>'gewicht_kg')::numeric) as min_gewicht,
+       MAX((eigenschaften_json->>'gewicht_kg')::numeric) as max_gewicht
 FROM geraete
-WHERE geraetegruppe ILIKE '%walze%' AND oszillation = true
+WHERE geraetegruppe IN ('Kettenbagger', 'Mobilbagger')
+  AND eigenschaften_json->>'gewicht_kg' IS NOT NULL
+  AND eigenschaften_json->>'gewicht_kg' != 'nicht-vorhanden'
+GROUP BY geraetegruppe
 
--- Fertiger mit Gasheizung:
-SELECT hersteller, bezeichnung, einbaubreite_max__m
+-- Walzen mit Oszillation (JSONB für Boolean!):
+SELECT hersteller, bezeichnung,
+       eigenschaften_json->>'arbeitsbreite_mm' as arbeitsbreite_mm
 FROM geraete
-WHERE geraetegruppe ILIKE '%fertiger%' AND gas_heizung = true
+WHERE geraetegruppe ILIKE '%walze%'
+  AND eigenschaften_json->>'oszillation' = 'true'
+
+-- Fertiger mit Gasheizung (JSONB für Boolean!):
+SELECT hersteller, bezeichnung,
+       eigenschaften_json->>'einbaubreite_max__m' as einbaubreite_max
+FROM geraete
+WHERE geraetegruppe ILIKE '%fertiger%'
+  AND eigenschaften_json->>'gas_heizung' = 'true'
 
 ================================================================================
 WICHTIGE REGELN
@@ -307,8 +299,10 @@ WICHTIGE REGELN
 1. Für Gerätetypen IMMER geraetegruppe verwenden, NICHT kategorie!
 2. verwendung-Filter NUR wenn explizit angefragt!
 3. KEIN LIMIT bei Auflistungs-/Zählabfragen!
-4. Boolean-Spalten direkt abfragen: klimaanlage = true
-5. Numerische Spalten direkt abfragen: gewicht_kg > 15000
+4. BOOLEAN-WERTE ÜBER JSONB: eigenschaften_json->>'feldname' = 'true'
+5. NUMERISCHE WERTE ÜBER JSONB: (eigenschaften_json->>'feldname')::numeric
+6. Bei ALLEN Vergleichen: Prüfe auf 'nicht-vorhanden' UND NULL!
+7. TEXT-Spalten (hersteller, geraetegruppe, verwendung) direkt abfragen
 """
 
 # =============================================================================
@@ -324,7 +318,7 @@ SQL_AGENT_SCHEMA = DATABASE_SCHEMA
 ORCHESTRATOR_SCHEMA = """
 DATENBANK-SCHEMA: Tabelle "geraete" (~2400 Baumaschinen)
 
-HAUPTSPALTEN:
+DIREKTE TEXT-SPALTEN (können direkt abgefragt werden):
 - id: VARCHAR Primary Key
 - hersteller: 124 verschiedene (Caterpillar, Liebherr, Bomag, etc.)
 - geraetegruppe: WICHTIGSTE SPALTE! 122 verschiedene Gruppen
@@ -336,18 +330,18 @@ HAUPTSPALTEN:
 - bezeichnung: Modellname
 - verwendung: 'Vermietung', 'Verkauf', 'Fuhrpark', etc.
 
-DIREKTE NUMERISCHE SPALTEN:
-- gewicht_kg, motor_leistung_kw, grabtiefe_mm, arbeitsbreite_mm, etc.
-
-DIREKTE BOOLEAN SPALTEN:
-- klimaanlage, schnellwechsler_hydr_, hammerhydraulik, tiltrotator, gps, etc.
+eigenschaften_json (JSONB) - ALLE numerischen und boolean Werte!
+- Werte sind TEXT-Strings: '250.0', 'true', 'false', 'nicht-vorhanden'
+- Numerisch: (eigenschaften_json->>'gewicht_kg')::numeric
+- Boolean: eigenschaften_json->>'klimaanlage' = 'true'
+- Felder: gewicht_kg, motor_leistung_kw, klimaanlage, hammerhydraulik, etc.
 
 BEISPIEL-ANFRAGEN:
 - "Liebherr Maschinen" → hersteller = 'Liebherr'
 - "Alle Bagger" → geraetegruppe ILIKE '%bagger%'
 - "Mietmaschinen" → verwendung = 'Vermietung'
-- "Bagger über 15t" → gewicht_kg > 15000
-- "Mit Klimaanlage" → klimaanlage = true
+- "Bagger über 15t" → (eigenschaften_json->>'gewicht_kg')::numeric > 15000
+- "Mit Klimaanlage" → eigenschaften_json->>'klimaanlage' = 'true'
 """
 
 # =============================================================================
@@ -413,8 +407,9 @@ VERWENDUNG_VALUES = [
     'Vermietung', 'Verkauf', 'Fuhrpark', 'Externes Gerät', 'keine'
 ]
 
-# Boolean columns that can be queried directly
-BOOLEAN_COLUMNS = [
+# Boolean fields in eigenschaften_json (query via: eigenschaften_json->>'field' = 'true')
+# Values are TEXT strings: 'true', 'false', 'nicht-vorhanden'
+BOOLEAN_FIELDS = [
     'allradantrieb', 'allradlenkung', 'knicklenkung', 'dieselmotor', 'motor_diesel',
     'motor_benzin', 'dieselpartikelfilter', 'elektrostarter', 'kabine', 'klimaanlage',
     'hochfahrbare_kabine', 'wetterschutzdach', 'hammerhydraulik', 'greiferhydraulik',
@@ -432,8 +427,9 @@ BOOLEAN_COLUMNS = [
     'schnellgang', 'vor_und_ruecklauf', 'vorlauf'
 ]
 
-# Numeric columns that can be queried directly
-NUMERIC_COLUMNS = [
+# Numeric fields in eigenschaften_json (query via: (eigenschaften_json->>'field')::numeric)
+# Values are TEXT strings: '250.0', 'nicht-vorhanden', etc.
+NUMERIC_FIELDS = [
     'gewicht_kg', 'motor_leistung_kw', 'laenge_mm', 'grabtiefe_mm', 'loeffelstiel_mm',
     'anzahl_zaehne', 'arbeitsbreite_mm', 'steigfaehigkeit_mit_vibration__pct',
     'steigfaehigkeit_ohne_vibration__pct', 'einbaubreite_max__m',
@@ -444,3 +440,7 @@ NUMERIC_COLUMNS = [
     'druck_bar', 'zul__reisskraft_knm', 'bodenplatten_mm', 'kantenschneidgeraet_stueck',
     'fahrgeschwindigkeit_km_h'
 ]
+
+# Backwards compatibility aliases (deprecated - use BOOLEAN_FIELDS/NUMERIC_FIELDS)
+BOOLEAN_COLUMNS = BOOLEAN_FIELDS
+NUMERIC_COLUMNS = NUMERIC_FIELDS

@@ -53,14 +53,19 @@ Analysiere die Benutzeranfrage und entscheide, welche Agenten aufgerufen werden 
 VERFÜGBARE AGENTEN:
 {agent_descriptions}
 
-ENTSCHEIDUNGSLOGIK:
+ENTSCHEIDUNGSLOGIK - Wähle basierend auf DATENQUELLE:
 
-- Zählen/Filtern/Auflisten → SQL-Agent (EINE Abfrage pro Anfrage-Teil)
-- Konkrete Eigenschaften (Gewicht, Leistung, Ausstattung) → SQL-Agent
-- "Wie viele", "Welche", "Liste alle" → SQL-Agent
-- "Empfehlung", "eignet sich", "beste für" → Pinecone-Agent
-- Szenario-Beschreibungen ohne exakte Werte → Pinecone-Agent
-- Externe Informationen (Marktpreise, News) → Web-Such-Agent (nur wenn nötig!)
+SQL-Agent (PostgreSQL Datenbank):
+→ Enthält: Strukturierte Gerätedaten (Bestand, Eigenschaften, Spezifikationen)
+→ Nutzen für: Zählen, Filtern, Auflisten, Vergleichen von Maschinen
+
+Pinecone-Agent (Vektordatenbank):
+→ Enthält: Unternehmensdokumente, Wissen, Anleitungen, Prozesse, Richtlinien
+→ Nutzen für: Empfehlungen, konzeptuelle Fragen, interne Dokumentation, Wissensfragen
+
+Web-Such-Agent (Internet):
+→ Enthält: Externe Informationen (Marktpreise, News, öffentliche Daten)
+→ Nutzen für: NUR wenn interne Daten nicht ausreichen!
 
 WICHTIG FÜR MULTI-TEIL ANFRAGEN:
 Wenn eine Anfrage mehrere Teile hat (z.B. "Wie viele X und welche Y"):

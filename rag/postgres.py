@@ -296,8 +296,9 @@ class PostgresService:
                 print(f"[PostgreSQL] Blocked dangerous SQL: {keyword}")
                 return []
 
-        # Must be a SELECT (or UNION which starts with (SELECT)
-        if not (sql_upper.startswith('SELECT') or sql_upper.startswith('(SELECT')):
+        # Must be a SELECT query (including WITH/CTE, UNION variants)
+        valid_starts = ('SELECT', '(SELECT', 'WITH')
+        if not any(sql_upper.startswith(start) for start in valid_starts):
             print("[PostgreSQL] Only SELECT queries allowed")
             return []
 
