@@ -16,6 +16,8 @@ except ImportError:
     POSTGRES_AVAILABLE = False
     print("[WARNING] psycopg2 not installed. PostgreSQL queries disabled.")
 
+from .schema import DATABASE_SCHEMA
+
 
 @dataclass
 class PostgresConfig:
@@ -42,58 +44,8 @@ class PostgresService:
     Executes SQL queries against the SEMA database.
     """
 
-    # Schema information for LLM context
-    SCHEMA_INFO = """
-PostgreSQL Table: geraete (construction equipment records)
-
-CLASSIFICATION COLUMNS:
-- kategorie: 'bagger', 'lader', 'verdichter', 'fertiger', 'fraese', 'kran', 'einbauunterstuetzung', 'transportfahrzeug'
-- geraetegruppe: 'Mobilbagger', 'Kettenbagger', 'Minibagger', 'Tandemwalze', 'Walzenzug', 'Radfertiger', 'Kettenfertiger', 'Kaltfräse', etc.
-- hersteller: 'Caterpillar', 'Liebherr', 'Bomag', 'Vögele', 'Hamm', 'Dynapac', 'Wirtgen', 'Kubota', 'Volvo', etc.
-- verwendung: 'Vermietung', 'Eigenbedarf', etc.
-
-JSONB COLUMN (eigenschaften_json) - Alle technischen Eigenschaften als Key-Value:
-
-Numerische Eigenschaften:
-- gewicht_kg: Gewicht in kg
-- motor_leistung_kw: Motorleistung in kW
-- breite_mm, hoehe_mm, laenge_mm: Abmessungen in mm
-- grabtiefe_mm: Grabtiefe in mm (Bagger)
-- arbeitsbreite_mm: Arbeitsbreite in mm (Walzen, Fertiger)
-- reichweite_mm: Reichweite in mm
-- hubkraft_kg: Hubkraft in kg
-
-Boolean Eigenschaften (true/false):
-- klimaanlage: Klimaanlage vorhanden
-- hammerhydraulik: Hammerhydraulik vorhanden
-- schnellwechsler: Schnellwechsler vorhanden
-- zentralschmierung: Zentralschmierung vorhanden
-- greifer: Greifer vorhanden
-- allradantrieb: Allradantrieb
-- tiltrotator: Tiltrotator
-- rueckfahrkamera: Rückfahrkamera
-- gps: GPS-System
-
-Text Eigenschaften:
-- motor_hersteller: 'Deutz', 'Cummins', 'Kubota', etc.
-- abgasstufe_eu: 'Stufe III', 'Stufe IV', 'Stufe V'
-- reifengroesse: Reifengröße
-- kettenbreite: Kettenbreite
-
-WICHTIG: eigenschaften_json kann VIELE weitere Eigenschaften enthalten!
-Query-Syntax: eigenschaften_json->>'feldname' = 'wert' oder = 'true'/'false'
-
-ARRAY COLUMN:
-- einsatzgebiete: Einsatzgebiete array ['aushub', 'strassenbau', 'asphaltverdichtung', ...]
-
-OTHER COLUMNS:
-- id: Primary key (VARCHAR)
-- seriennummer: Seriennummer
-- inventarnummer: Inventarnummer
-- bezeichnung: Gerätebezeichnung/Modell
-- inhalt: Volltext-Beschreibung
-- titel: Titel
-"""
+    # Schema information imported from centralized schema.py
+    SCHEMA_INFO = DATABASE_SCHEMA
 
     def __init__(self, config: Optional[PostgresConfig] = None):
         self.config = config or PostgresConfig()
@@ -354,12 +306,12 @@ OTHER COLUMNS:
             print("[PostgreSQL] Malformed SQL: unbalanced parentheses")
             return []
 
-        # Add LIMIT only if SQL looks complete (ends with proper clause)
-        # BUT don't add LIMIT to UNION queries (they already have it or would break)
+        # Add high safety LIMIT only if none specified
+        # This prevents runaway queries while allowing full result sets
         sql = sql.rstrip(';')
         is_union_query = 'UNION' in sql_upper
         if 'LIMIT' not in sql_upper and not is_union_query:
-            sql += ' LIMIT 100'
+            sql += ' LIMIT 10000'
 
         return self.execute_query(sql)
 

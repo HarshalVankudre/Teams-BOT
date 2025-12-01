@@ -1,13 +1,22 @@
 """
-Web Search Agent (Non-Reasoning Model)
+Web Search SubAgent
+
 Retrieves supplementary information from the web using Tavily API.
 Used ONLY for external information not available in internal databases.
 """
 from typing import List, Dict, Any, Optional
 
-from .base import BaseAgent, AgentContext, AgentResponse, AgentType
-from .registry import AgentMetadata, AgentCapability, register_agent
-from ..config import config
+from .interface import (
+    SubAgentBase,
+    tool,
+    register_subagent,
+    AgentMetadata,
+    AgentCapability,
+    AgentContext,
+    AgentResponse,
+    AgentType
+)
+from ...config import config
 
 # Try to import Tavily
 try:
@@ -17,7 +26,7 @@ except ImportError:
     TAVILY_AVAILABLE = False
 
 
-# Agent metadata for registration
+# Agent metadata
 WEB_SEARCH_AGENT_METADATA = AgentMetadata(
     agent_id="web_search",
     name="Web Search Agent",
@@ -58,12 +67,14 @@ Web-Suche nur als Ergänzung verwenden.""",
 )
 
 
-@register_agent(WEB_SEARCH_AGENT_METADATA)
-class WebSearchAgent(BaseAgent):
+@register_subagent()
+class WebSearchAgent(SubAgentBase):
     """
     Performs web searches using Tavily API.
     Used for supplementary information only - internal data takes priority.
     """
+
+    METADATA = WEB_SEARCH_AGENT_METADATA
 
     def __init__(
         self,
@@ -84,6 +95,110 @@ class WebSearchAgent(BaseAgent):
         else:
             self.client = None
             self.log("Web search disabled (missing API key or tavily not installed)")
+
+    # ==================== TOOLS ====================
+
+    @tool(
+        name="web_search",
+        description="Search the web for information",
+        parameters={
+            "query": {"type": "string", "description": "Search query"},
+            "max_results": {"type": "integer", "description": "Maximum results (default: 3)"},
+            "search_depth": {"type": "string", "description": "basic or advanced"}
+        },
+        required=["query"]
+    )
+    async def web_search_tool(
+        self,
+        query: str,
+        max_results: int = 3,
+        search_depth: str = "basic"
+    ) -> Dict[str, Any]:
+        """Perform a web search"""
+        if not self.enabled:
+            return {
+                "success": False,
+                "error": "Web search is disabled",
+                "results": []
+            }
+
+        try:
+            response = await self.client.search(
+                query=query,
+                search_depth=search_depth,
+                max_results=max_results,
+                include_answer=False,
+                include_raw_content=False
+            )
+
+            results = [
+                {
+                    "title": item.get("title", ""),
+                    "url": item.get("url", ""),
+                    "content": item.get("content", ""),
+                    "score": item.get("score", 0)
+                }
+                for item in response.get("results", [])
+            ]
+
+            return {
+                "success": True,
+                "results": results,
+                "count": len(results)
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e),
+                "results": []
+            }
+
+    @tool(
+        name="search_with_context",
+        description="Search the web with additional context to improve results",
+        parameters={
+            "query": {"type": "string", "description": "Main search query"},
+            "context_hint": {"type": "string", "description": "Additional context to refine search"},
+            "max_results": {"type": "integer", "description": "Maximum results"}
+        },
+        required=["query"]
+    )
+    async def search_with_context_tool(
+        self,
+        query: str,
+        context_hint: str = None,
+        max_results: int = None
+    ) -> Dict[str, Any]:
+        """Convenience method for direct web search with optional context."""
+        if not self.enabled:
+            return {"success": False, "error": "Web search disabled", "results": []}
+
+        search_query = f"{query} {context_hint}" if context_hint else query
+
+        try:
+            response = await self.client.search(
+                query=search_query,
+                search_depth="basic",
+                max_results=max_results or self.max_results,
+                include_answer=False,
+                include_raw_content=False
+            )
+
+            results = [
+                {
+                    "title": item.get("title", ""),
+                    "url": item.get("url", ""),
+                    "content": item.get("content", ""),
+                    "score": item.get("score", 0)
+                }
+                for item in response.get("results", [])
+            ]
+
+            return {"success": True, "results": results, "count": len(results)}
+        except Exception as e:
+            return {"success": False, "error": str(e), "results": []}
+
+    # ==================== MAIN EXECUTION ====================
 
     async def _execute(self, context: AgentContext) -> AgentResponse:
         """
@@ -107,101 +222,46 @@ class WebSearchAgent(BaseAgent):
 
         self.log(f"Searching web: {search_query[:50]}...")
 
-        try:
-            response = await self.client.search(
-                query=search_query,
-                search_depth=search_depth,
-                max_results=max_results,
-                include_answer=False,
-                include_raw_content=False
-            )
+        # Use our tool
+        result = await self.web_search_tool(
+            query=search_query,
+            max_results=max_results,
+            search_depth=search_depth
+        )
 
-            results = []
-            sources = []
-
-            for item in response.get("results", []):
-                result = {
-                    "title": item.get("title", ""),
-                    "url": item.get("url", ""),
-                    "content": item.get("content", ""),
-                    "score": item.get("score", 0),
-                    "source": "web"
-                }
-                results.append(result)
-                sources.append({
-                    "type": "web",
-                    "title": result["title"],
-                    "url": result["url"],
-                    "score": result["score"]
-                })
-
-            self.log(f"Found {len(results)} web results")
-
-            # Store in context for reviewer
-            context.web_results = results
-
-            return AgentResponse.success_response(
-                data={
-                    "results": results,
-                    "result_count": len(results),
-                    "query": search_query
-                },
-                agent_type=self._agent_type,
-                sources=sources
-            )
-
-        except Exception as e:
-            self.log(f"Web search error: {str(e)}")
+        if not result["success"]:
             return AgentResponse.error_response(
-                error=f"Web search failed: {str(e)}",
+                error=f"Web search failed: {result.get('error')}",
                 agent_type=self._agent_type
             )
 
-    async def search_with_context(
-        self,
-        query: str,
-        context_hint: str = None,
-        max_results: int = None
-    ) -> List[Dict[str, Any]]:
-        """
-        Convenience method for direct web search with optional context.
+        results = result["results"]
+        sources = [
+            {
+                "type": "web",
+                "title": r["title"],
+                "url": r["url"],
+                "score": r["score"]
+            }
+            for r in results
+        ]
 
-        Args:
-            query: The search query
-            context_hint: Optional context to improve search results
-            max_results: Override default max results
+        self.log(f"Found {len(results)} web results")
 
-        Returns:
-            List of search results
-        """
-        if not self.enabled:
-            return []
+        # Store in context for reviewer
+        context.web_results = results
 
-        # Enhance query with context if provided
-        search_query = f"{query} {context_hint}" if context_hint else query
+        return AgentResponse.success_response(
+            data={
+                "results": results,
+                "result_count": len(results),
+                "query": search_query
+            },
+            agent_type=self._agent_type,
+            sources=sources
+        )
 
-        try:
-            response = await self.client.search(
-                query=search_query,
-                search_depth="basic",
-                max_results=max_results or self.max_results,
-                include_answer=False,
-                include_raw_content=False
-            )
-
-            return [
-                {
-                    "title": item.get("title", ""),
-                    "url": item.get("url", ""),
-                    "content": item.get("content", ""),
-                    "score": item.get("score", 0)
-                }
-                for item in response.get("results", [])
-            ]
-
-        except Exception as e:
-            self.log(f"Direct search error: {str(e)}")
-            return []
+    # ==================== UTILITY METHODS ====================
 
     def format_results_for_context(
         self,

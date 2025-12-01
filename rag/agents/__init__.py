@@ -3,9 +3,7 @@ Multi-Agent System for RUKO Teams Bot
 
 Architecture:
 - OrchestratorAgent: Reasoning LLM that analyzes queries and delegates to specialized agents
-- SQLGeneratorAgent: Generates and executes SQL queries against PostgreSQL
-- PineconeSearchAgent: Performs semantic search in Pinecone vector store
-- WebSearchAgent: Retrieves supplementary information from the web via Tavily
+- SubAgents: Specialized agents in the subagents/ folder (SQL, Pinecone, WebSearch, etc.)
 - ReviewerAgent: Reviews data from sub-agents and generates natural language responses
 
 Flow:
@@ -17,7 +15,17 @@ Flow:
 Agent Registry:
 - Agents self-register with metadata describing their capabilities
 - The orchestrator dynamically discovers available agents
-- Easy to add new agents by creating a new file with @register_agent decorator
+- Easy to add new agents by creating a new file in subagents/ folder
+
+To add a new subagent:
+1. Create a new .py file in rag/agents/subagents/
+2. Inherit from SubAgentBase
+3. Define METADATA class attribute
+4. Use @register_subagent() decorator
+5. Implement _execute() method
+6. Optionally define tools using @tool decorator
+
+See rag/agents/subagents/_template.py for an example!
 """
 
 # Registry system for dynamic agent discovery
@@ -31,12 +39,27 @@ from .registry import (
 # Base classes
 from .base import BaseAgent, AgentResponse, AgentContext, AgentType
 
-# Import agents to trigger their registration
+# Import top-level agents
 from .orchestrator import OrchestratorAgent
-from .sql_agent import SQLGeneratorAgent
-from .pinecone_agent import PineconeSearchAgent
-from .web_search_agent import WebSearchAgent
 from .reviewer_agent import ReviewerAgent
+
+# Import subagents package - triggers auto-discovery
+from .subagents import (
+    SubAgentBase,
+    ToolDefinition,
+    tool,
+    register_subagent,
+    discover_agents,
+    get_all_subagent_classes,
+)
+
+# Ensure subagents are discovered and registered
+discover_agents()
+
+# Import specific subagent classes for backward compatibility
+from .subagents.sql_agent import SQLGeneratorAgent
+from .subagents.pinecone_agent import PineconeSearchAgent
+from .subagents.web_search_agent import WebSearchAgent
 
 # Agent system coordinator
 from .agent_system import AgentSystem, AgentSystemConfig, AgentSystemResult, create_agent_system
@@ -54,12 +77,22 @@ __all__ = [
     "AgentContext",
     "AgentType",
 
-    # Agents
+    # SubAgent interface
+    "SubAgentBase",
+    "ToolDefinition",
+    "tool",
+    "register_subagent",
+    "discover_agents",
+    "get_all_subagent_classes",
+
+    # Top-level agents
     "OrchestratorAgent",
+    "ReviewerAgent",
+
+    # SubAgents (backward compatibility)
     "SQLGeneratorAgent",
     "PineconeSearchAgent",
     "WebSearchAgent",
-    "ReviewerAgent",
 
     # Agent system
     "AgentSystem",

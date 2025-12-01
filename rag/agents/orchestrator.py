@@ -11,6 +11,7 @@ from openai import AsyncOpenAI
 from .base import BaseAgent, AgentContext, AgentResponse, AgentType
 from .registry import AgentMetadata, AgentCapability, AgentRegistry, register_agent
 from ..config import config
+from ..schema import ORCHESTRATOR_SCHEMA
 
 
 # Agent metadata for registration
@@ -38,40 +39,8 @@ class OrchestratorAgent(BaseAgent):
     Dynamically discovers available agents from the registry.
     """
 
-    # Database schema information for context
-    DATABASE_SCHEMA = """
-DATENBANK-SCHEMA: Tabelle "geraete" (Baumaschinen-Inventar)
-
-WICHTIGE SPALTEN:
-- id: VARCHAR Primary Key
-- hersteller: Hersteller der Maschine
-  Werte: 'Caterpillar', 'Liebherr', 'Bomag', 'Vögele', 'Hamm', 'Wirtgen', 'Kubota', 'Volvo', 'Hitachi', 'Komatsu', etc.
-- geraetegruppe: WICHTIGSTE Spalte für Gerätetypen!
-  Bagger: 'Mobilbagger', 'Kettenbagger', 'Minibagger (0,0 to - 4,4 to)'
-  Walzen: 'Tandemwalze', 'Walzenzug', 'Gummiradwalze'
-  Fertiger: 'Radfertiger', 'Kettenfertiger'
-  Fräsen: 'Kaltfräse', 'Großfräse'
-- kategorie: Oberkategorie (kann NULL sein) - 'bagger', 'walze', 'fertiger', etc.
-- bezeichnung: Modellname/Bezeichnung
-- seriennummer: Seriennummer des Geräts
-- inventarnummer: Interne Inventarnummer
-- verwendung: 'Vermietung', 'Eigenbedarf', 'Verkauf', 'Externes Gerät'
-
-JSONB SPALTE "eigenschaften_json" enthält:
-- gewicht_kg: Betriebsgewicht
-- motor_leistung_kw: Motorleistung in kW
-- breite_mm, hoehe_mm, laenge_mm: Abmessungen
-- grabtiefe_mm: Grabtiefe (bei Baggern)
-- arbeitsbreite_mm: Arbeitsbreite (bei Walzen, Fertigern)
-- klimaanlage, gps, schnellwechsler: Boolean ('true'/'false')
-- abgasstufe_eu: Abgasstufe ('Stufe V', etc.)
-
-BEISPIEL-ANFRAGEN UND WIE SIE ZU VERSTEHEN SIND:
-- "Liebherr Maschinen" = Alle Geräte mit hersteller = 'Liebherr'
-- "Caterpillar Bagger" = Geräte mit hersteller = 'Caterpillar' UND geraetegruppe ILIKE '%bagger%'
-- "Wie viele Bagger" = COUNT mit geraetegruppe ILIKE '%bagger%'
-- "Schwere Bagger" = Bagger mit hohem gewicht_kg (z.B. > 20000)
-"""
+    # Database schema imported from centralized schema.py
+    DATABASE_SCHEMA = ORCHESTRATOR_SCHEMA
 
     # Base system prompt template - agent descriptions are injected dynamically
     SYSTEM_PROMPT_TEMPLATE = """Du bist der Orchestrator-Agent für das RÜKO Baumaschinen-System.

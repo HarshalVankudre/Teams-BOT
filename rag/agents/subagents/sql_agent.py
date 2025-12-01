@@ -1,5 +1,6 @@
 """
-SQL Generator Agent (Non-Reasoning Model)
+SQL Generator SubAgent
+
 Generates and executes SQL queries against the PostgreSQL database.
 Uses a fast, non-reasoning model for efficiency.
 """
@@ -7,13 +8,22 @@ import json
 from typing import List, Dict, Any, Optional
 from openai import AsyncOpenAI
 
-from .base import BaseAgent, AgentContext, AgentResponse, AgentType
-from .registry import AgentMetadata, AgentCapability, register_agent
-from ..config import config
-from ..postgres import postgres_service, PostgresService
+from .interface import (
+    SubAgentBase,
+    tool,
+    register_subagent,
+    AgentMetadata,
+    AgentCapability,
+    AgentContext,
+    AgentResponse,
+    AgentType
+)
+from ...config import config
+from ...postgres import postgres_service, PostgresService
+from ...schema import SQL_AGENT_SCHEMA
 
 
-# Agent metadata for registration
+# Agent metadata
 SQL_AGENT_METADATA = AgentMetadata(
     agent_id="sql",
     name="SQL Generator Agent",
@@ -49,137 +59,26 @@ Verwende diesen Agenten für:
 )
 
 
-@register_agent(SQL_AGENT_METADATA)
-class SQLGeneratorAgent(BaseAgent):
+@register_subagent()
+class SQLGeneratorAgent(SubAgentBase):
     """
     Generates SQL queries based on task descriptions and executes them.
     Uses tool-calling to generate valid SQL for the equipment database.
     """
 
-    # Schema information for the LLM
-    SCHEMA_INFO = """
-DATENBANK-SCHEMA: Tabelle "geraete" (Baumaschinen)
+    METADATA = SQL_AGENT_METADATA
 
-KLASSIFIKATION:
-- geraetegruppe: WICHTIGSTE SPALTE für Gerätetypen!
-  Bagger: 'Mobilbagger', 'Kettenbagger', 'Minibagger (0,0 to - 4,4 to)'
-  Walzen: 'Tandemwalze', 'Walzenzug', 'Gummiradwalze'
-  Fertiger: 'Radfertiger', 'Kettenfertiger'
-  Fräsen: 'Kaltfräse', 'Großfräse'
-- kategorie: Kann NULL sein! Nur als Fallback verwenden
-- hersteller: 'Caterpillar', 'Liebherr', 'Bomag', 'Vögele', 'Hamm', 'Wirtgen', 'Kubota', 'Volvo', etc.
-- verwendung: 'Vermietung', 'Eigenbedarf', 'Verkauf', 'Externes Gerät' - NUR filtern wenn explizit angefragt!
-
-IDENTIFIKATION:
-- id: VARCHAR Primary Key
-- seriennummer: Seriennummer
-- inventarnummer: Inventarnummer
-- bezeichnung: Modellname/Bezeichnung
-- titel: Titel
-
-JSONB SPALTE "eigenschaften_json":
-Numerische Werte (als String-Dezimalzahlen wie "16300.0"):
-- gewicht_kg: Betriebsgewicht
-- motor_leistung_kw: Motorleistung
-- breite_mm, hoehe_mm, laenge_mm: Abmessungen
-- grabtiefe_mm: Grabtiefe (Bagger)
-- arbeitsbreite_mm: Arbeitsbreite (Walzen, Fertiger)
-- reichweite_mm: Reichweite
-- hubkraft_kg: Hubkraft
-
-Boolean Werte (als String "true"/"false"/"nicht-vorhanden"):
-- klimaanlage, hammerhydraulik, schnellwechsler
-- zentralschmierung, greifer, allradantrieb
-- tiltrotator, rueckfahrkamera, gps
-
-Text Werte:
-- motor_hersteller: 'Deutz', 'Cummins', 'Kubota'
-- abgasstufe_eu: 'Stufe III', 'Stufe IV', 'Stufe V', 'Stage V / TIER4f'
-
-ARRAY SPALTE:
-- einsatzgebiete: TEXT[] Array mit Einsatzgebieten
-
-SQL-SYNTAX FÜR JSONB:
-- String: eigenschaften_json->>'feldname' = 'wert'
-- Boolean: eigenschaften_json->>'klimaanlage' = 'true'
-- Numerisch filtern:
-  eigenschaften_json->>'gewicht_kg' ~ '^[0-9]+(\\.[0-9]+)?$'
-  AND (eigenschaften_json->>'gewicht_kg')::numeric > 15000
-- Aggregation mit Filter für "nicht-vorhanden":
-  AVG(CASE WHEN eigenschaften_json->>'gewicht_kg' ~ '^[0-9]+(\\.[0-9]+)?$'
-           AND eigenschaften_json->>'gewicht_kg' NOT IN ('nicht-vorhanden', '')
-      THEN (eigenschaften_json->>'gewicht_kg')::numeric END)
-"""
-
-    SQL_EXAMPLES = """
-SQL-BEISPIELE:
-
--- Anzahl Bagger (WICHTIG: geraetegruppe verwenden, NICHT kategorie!):
-SELECT COUNT(*) as anzahl FROM geraete WHERE geraetegruppe ILIKE '%bagger%'
-
--- Alle Mobilbagger:
-SELECT COUNT(*) as anzahl FROM geraete WHERE geraetegruppe = 'Mobilbagger'
-
--- Bagger über 15t mit Klimaanlage:
-SELECT hersteller, bezeichnung, eigenschaften_json->>'gewicht_kg' as gewicht_kg
-FROM geraete
-WHERE geraetegruppe ILIKE '%bagger%'
-AND eigenschaften_json->>'gewicht_kg' ~ '^[0-9]+(\\.[0-9]+)?$'
-AND (eigenschaften_json->>'gewicht_kg')::numeric > 15000
-AND eigenschaften_json->>'klimaanlage' = 'true'
-ORDER BY (eigenschaften_json->>'gewicht_kg')::numeric DESC
-LIMIT 20
-
--- Durchschnittsgewicht nach Gerätegruppe für Bagger:
-SELECT geraetegruppe,
-       COUNT(*) as anzahl,
-       ROUND(AVG(CASE
-           WHEN eigenschaften_json->>'gewicht_kg' ~ '^[0-9]+(\\.[0-9]+)?$'
-                AND eigenschaften_json->>'gewicht_kg' NOT IN ('nicht-vorhanden', '')
-           THEN (eigenschaften_json->>'gewicht_kg')::numeric
-       END)) as durchschnitt_kg
-FROM geraete
-WHERE geraetegruppe ILIKE '%bagger%'
-GROUP BY geraetegruppe
-ORDER BY anzahl DESC
-
--- Alle Walzen:
-SELECT COUNT(*) as anzahl FROM geraete WHERE geraetegruppe IN ('Tandemwalze', 'Walzenzug', 'Gummiradwalze')
-
--- Suche nach Seriennummer:
-SELECT * FROM geraete WHERE seriennummer ILIKE '%ABC123%' LIMIT 10
-
--- Geräte mit bestimmter Abgasstufe:
-SELECT hersteller, bezeichnung, geraetegruppe
-FROM geraete
-WHERE eigenschaften_json->>'abgasstufe_eu' ILIKE '%Stufe V%'
-LIMIT 20
-
--- Vergleich zweier Gerätegruppen:
-SELECT geraetegruppe,
-       COUNT(*) as anzahl,
-       ROUND(AVG(CASE WHEN eigenschaften_json->>'gewicht_kg' ~ '^[0-9]+(\\.[0-9]+)?$'
-                      AND eigenschaften_json->>'gewicht_kg' NOT IN ('nicht-vorhanden', '')
-                 THEN (eigenschaften_json->>'gewicht_kg')::numeric END)) as avg_gewicht_kg,
-       ROUND(AVG(CASE WHEN eigenschaften_json->>'motor_leistung_kw' ~ '^[0-9]+(\\.[0-9]+)?$'
-                      AND eigenschaften_json->>'motor_leistung_kw' NOT IN ('nicht-vorhanden', '')
-                 THEN (eigenschaften_json->>'motor_leistung_kw')::numeric END)) as avg_leistung_kw
-FROM geraete
-WHERE geraetegruppe IN ('Kettenbagger', 'Mobilbagger')
-GROUP BY geraetegruppe
-"""
-
+    # System prompt uses schema from centralized schema.py
     SYSTEM_PROMPT = f"""Du bist ein SQL-Generator für eine PostgreSQL-Datenbank mit Baumaschinen.
 
-{SCHEMA_INFO}
-
-{SQL_EXAMPLES}
+{SQL_AGENT_SCHEMA}
 
 REGELN:
 1. Generiere NUR SELECT-Abfragen
 2. Verwende IMMER korrekte JSONB-Syntax
 3. Bei numerischen Vergleichen: Prüfe IMMER auf gültiges Zahlenformat mit Regex
-4. Füge IMMER LIMIT hinzu (max 100)
+4. KEIN LIMIT bei Zähl- oder Auflistungsanfragen ("alle", "welche", "wie viele", "liste")
+   - Nur bei "zeige einige/ein paar/Beispiele" ein kleines LIMIT (10-20) verwenden
 5. Bei Boolean-Eigenschaften: 'true', 'false', oder 'nicht-vorhanden'
 6. Verwende ILIKE für case-insensitive Textsuche
 7. Bei AVG/SUM: Filtere 'nicht-vorhanden' und leere Werte aus
@@ -196,7 +95,8 @@ WICHTIG:
 - Keine Kommentare im SQL
 - Keine Erklärungen, nur das SQL"""
 
-    TOOLS = [
+    # OpenAI tool definition for SQL execution
+    OPENAI_TOOLS = [
         {
             "type": "function",
             "function": {
@@ -230,11 +130,48 @@ WICHTIG:
         super().__init__(verbose=verbose)
         self._agent_type = AgentType.SQL_GENERATOR
         self.client = openai_client or AsyncOpenAI(api_key=config.openai_api_key)
-
-        # Use a fast, non-reasoning model for SQL generation
-        # Fall back to config model if not specified
         self.model = model or config.chunking_model or "gpt-4o-mini"
         self.postgres = postgres or postgres_service
+
+    # ==================== TOOLS ====================
+
+    @tool(
+        name="execute_sql",
+        description="Execute a SQL query against the equipment database",
+        parameters={
+            "sql": {"type": "string", "description": "The SQL SELECT query to execute"}
+        },
+        required=["sql"]
+    )
+    async def execute_sql_tool(self, sql: str) -> Dict[str, Any]:
+        """Execute a SQL query and return results"""
+        try:
+            results = self.postgres.execute_dynamic_sql(sql)
+            return {
+                "success": True,
+                "results": results,
+                "row_count": len(results)
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e),
+                "results": [],
+                "row_count": 0
+            }
+
+    @tool(
+        name="get_schema_info",
+        description="Get database schema information",
+        parameters={}
+    )
+    async def get_schema_info_tool(self) -> Dict[str, Any]:
+        """Return schema information for the database"""
+        return {
+            "schema": SQL_AGENT_SCHEMA
+        }
+
+    # ==================== MAIN EXECUTION ====================
 
     async def _execute(self, context: AgentContext) -> AgentResponse:
         """
@@ -261,7 +198,7 @@ WICHTIG:
         response = await self.client.chat.completions.create(
             model=self.model,
             messages=messages,
-            tools=self.TOOLS,
+            tools=self.OPENAI_TOOLS,
             tool_choice={"type": "function", "function": {"name": "execute_sql"}}
         )
 
@@ -293,44 +230,45 @@ WICHTIG:
 
         self.log(f"SQL: {sql[:100]}...")
 
-        # Execute the SQL
-        try:
-            results = self.postgres.execute_dynamic_sql(sql)
-            self.log(f"Results: {len(results)} rows")
+        # Execute the SQL using our tool
+        result = await self.execute_sql_tool(sql)
 
-            # Store results in context for reviewer
-            context.sql_results = results
+        if not result["success"]:
+            self.log(f"SQL execution error: {result.get('error')}")
 
-            return AgentResponse.success_response(
-                data={
-                    "sql": sql,
-                    "results": results,
-                    "row_count": len(results),
-                    "explanation": explanation
-                },
-                agent_type=self._agent_type,
-                reasoning=explanation,
-                tool_calls=[{"name": "execute_sql", "sql": sql}],
-                sources=[{"type": "postgresql", "query": sql, "row_count": len(results)}]
-            )
-
-        except Exception as e:
-            self.log(f"SQL execution error: {str(e)}")
-
-            # Try to generate a fallback query
-            fallback_result = await self._try_fallback_query(task_description, str(e))
+            # Try fallback query
+            fallback_result = await self._try_fallback_query(task_description, result.get("error", ""))
             if fallback_result:
                 context.sql_results = fallback_result["results"]
                 return AgentResponse.success_response(
                     data=fallback_result,
                     agent_type=self._agent_type,
-                    reasoning=f"Fallback query used after error: {str(e)}"
+                    reasoning=f"Fallback query used after error: {result.get('error')}"
                 )
 
             return AgentResponse.error_response(
-                error=f"SQL execution failed: {str(e)}",
+                error=f"SQL execution failed: {result.get('error')}",
                 agent_type=self._agent_type
             )
+
+        results = result["results"]
+        self.log(f"Results: {len(results)} rows")
+
+        # Store results in context for reviewer
+        context.sql_results = results
+
+        return AgentResponse.success_response(
+            data={
+                "sql": sql,
+                "results": results,
+                "row_count": len(results),
+                "explanation": explanation
+            },
+            agent_type=self._agent_type,
+            reasoning=explanation,
+            tool_calls=[{"name": "execute_sql", "sql": sql}],
+            sources=[{"type": "postgresql", "query": sql, "row_count": len(results)}]
+        )
 
     async def _try_fallback_query(
         self,
@@ -358,7 +296,7 @@ WICHTIG:
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
-                tools=self.TOOLS,
+                tools=self.OPENAI_TOOLS,
                 tool_choice={"type": "function", "function": {"name": "execute_sql"}}
             )
 
@@ -368,15 +306,16 @@ WICHTIG:
                 sql = args.get("sql", "")
 
                 if sql:
-                    results = self.postgres.execute_dynamic_sql(sql)
-                    self.log(f"Fallback successful: {len(results)} rows")
-                    return {
-                        "sql": sql,
-                        "results": results,
-                        "row_count": len(results),
-                        "explanation": "Fallback query",
-                        "is_fallback": True
-                    }
+                    result = await self.execute_sql_tool(sql)
+                    if result["success"]:
+                        self.log(f"Fallback successful: {result['row_count']} rows")
+                        return {
+                            "sql": sql,
+                            "results": result["results"],
+                            "row_count": result["row_count"],
+                            "explanation": "Fallback query",
+                            "is_fallback": True
+                        }
         except Exception as e:
             self.log(f"Fallback also failed: {str(e)}")
 
