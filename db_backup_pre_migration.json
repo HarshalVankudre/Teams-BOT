@@ -1,0 +1,55 @@
+{
+  "total_rows": 2395,
+  "direct_column_counts": {
+    "direct_gewicht_count": 0,
+    "direct_klimaanlage_count": 0
+  },
+  "sample_before": [
+    {
+      "id": "sema_12535521",
+      "hersteller": "Hamm",
+      "geraetegruppe": "Walzenzug (Glattmantel)",
+      "direct_gewicht": null,
+      "direct_klimaanlage": null,
+      "json_gewicht": "nicht-vorhanden",
+      "json_klimaanlage": "nicht-vorhanden"
+    },
+    {
+      "id": "sema_114394905",
+      "hersteller": "Liebherr",
+      "geraetegruppe": "Mobilbagger",
+      "direct_gewicht": null,
+      "direct_klimaanlage": null,
+      "json_gewicht": "nicht-vorhanden",
+      "json_klimaanlage": "nicht-vorhanden"
+    },
+    {
+      "id": "sema_1000033749",
+      "hersteller": "Dynapac",
+      "geraetegruppe": "Materialk\u00fcbel f\u00fcr Beschicker",
+      "direct_gewicht": null,
+      "direct_klimaanlage": null,
+      "json_gewicht": "1200.0",
+      "json_klimaanlage": "nicht-vorhanden"
+    },
+    {
+      "id": "sema_RG004829 ",
+      "hersteller": "Dynapac",
+      "geraetegruppe": "Beschicker",
+      "direct_gewicht": null,
+      "direct_klimaanlage": null,
+      "json_gewicht": "20000.0",
+      "json_klimaanlage": "false"
+    },
+    {
+      "id": "sema_12535521_2",
+      "hersteller": "Hamm",
+      "geraetegruppe": "Walzenzug (Glattmantel)",
+      "direct_gewicht": null,
+      "direct_klimaanlage": null,
+      "json_gewicht": "nicht-vorhanden",
+      "json_klimaanlage": "nicht-vorhanden"
+    }
+  ],
+  "timestamp": "2025-12-01T23:54:25.981327"
+}

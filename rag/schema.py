@@ -20,10 +20,11 @@ DATABASE_SCHEMA = """
 DATENBANK-SCHEMA: Tabelle "geraete" (Baumaschinen-Inventar)
 ================================================================================
 
-KRITISCH - DATENSTRUKTUR:
-- Nur TEXT-Spalten (hersteller, geraetegruppe, etc.) haben direkte Werte
-- ALLE numerischen und boolean Werte sind NUR in eigenschaften_json (JSONB)!
-- Werte in JSONB sind TEXT-Strings: '250.0', 'true', 'false', 'nicht-vorhanden'
+DATENSTRUKTUR (nach Migration v1.2):
+- TEXT-Spalten (hersteller, geraetegruppe, etc.): Direkte Werte
+- NUMERISCHE Spalten: Jetzt direkt verfügbar (gewicht_kg, motor_leistung_kw, etc.)
+- BOOLEAN Spalten: Jetzt direkt verfügbar (klimaanlage, hammerhydraulik, etc.)
+- eigenschaften_json (JSONB): Backup/Fallback, enthält auch 'nicht-vorhanden' Marker
 
 ================================================================================
 IDENTIFIKATION (VARCHAR/TEXT)
@@ -76,12 +77,12 @@ ARRAY SPALTEN
 - geeignet_fuer: TEXT - Geeignet für (Freitext)
 
 ================================================================================
-NUMERISCHE WERTE - NUR IN eigenschaften_json (JSONB)!
+NUMERISCHE SPALTEN (DOUBLE PRECISION) - DIREKT VERFÜGBAR!
 ================================================================================
 
-WICHTIG: Alle numerischen Werte sind NUR in eigenschaften_json gespeichert!
-Zugriff: (eigenschaften_json->>'feldname')::numeric
-Filterung: eigenschaften_json->>'feldname' != 'nicht-vorhanden'
+WICHTIG: Nach Migration sind numerische Werte als DIREKTE SPALTEN verfügbar!
+Zugriff: gewicht_kg > 15000 (direkt, kein JSONB nötig)
+NULL-Werte: Wo JSONB 'nicht-vorhanden' hatte, ist die Spalte NULL
 
 Abmessungen & Gewicht:
 - gewicht_kg: Betriebsgewicht in kg
@@ -135,13 +136,12 @@ Sonstige:
 - kantenschneidgeraet_stueck: Kantenschneidgerät Anzahl
 
 ================================================================================
-BOOLEAN WERTE - NUR IN eigenschaften_json (JSONB als TEXT)!
+BOOLEAN SPALTEN - DIREKT VERFÜGBAR!
 ================================================================================
 
-WICHTIG: Boolean-Werte sind TEXT-Strings in JSONB!
-Werte: 'true', 'false', 'nicht-vorhanden'
-Zugriff: eigenschaften_json->>'feldname' = 'true'
-NICHT: feldname = true (funktioniert NICHT!)
+WICHTIG: Nach Migration sind Boolean-Werte als DIREKTE SPALTEN verfügbar!
+Zugriff: klimaanlage = true (direkt, kein JSONB nötig)
+NULL-Werte: Wo JSONB 'nicht-vorhanden' hatte, ist die Spalte NULL
 
 Antrieb & Fahrwerk:
 - allradantrieb, allradlenkung, knicklenkung
@@ -245,52 +245,46 @@ SELECT hersteller, bezeichnung, geraetegruppe
 FROM geraete
 WHERE verwendung = 'Vermietung'
 
--- Bagger über 15t mit Klimaanlage (JSONB für ALLE Werte!):
-SELECT hersteller, bezeichnung,
-       (eigenschaften_json->>'gewicht_kg')::numeric as gewicht_kg
+-- Bagger über 15t mit Klimaanlage (DIREKTE Spalten!):
+SELECT hersteller, bezeichnung, gewicht_kg
 FROM geraete
 WHERE geraetegruppe ILIKE '%bagger%'
-AND eigenschaften_json->>'gewicht_kg' != 'nicht-vorhanden'
-AND (eigenschaften_json->>'gewicht_kg')::numeric > 15000
-AND eigenschaften_json->>'klimaanlage' = 'true'
-ORDER BY (eigenschaften_json->>'gewicht_kg')::numeric DESC
+  AND gewicht_kg > 15000
+  AND klimaanlage = true
+ORDER BY gewicht_kg DESC
 
--- Durchschnittsgewicht nach Gerätegruppe (JSONB-Zugriff!):
+-- Durchschnittsgewicht nach Gerätegruppe:
 SELECT geraetegruppe,
        COUNT(*) as anzahl,
-       ROUND(AVG((eigenschaften_json->>'gewicht_kg')::numeric)) as avg_gewicht
+       ROUND(AVG(gewicht_kg)) as avg_gewicht
 FROM geraete
 WHERE geraetegruppe ILIKE '%bagger%'
-  AND eigenschaften_json->>'gewicht_kg' IS NOT NULL
-  AND eigenschaften_json->>'gewicht_kg' != 'nicht-vorhanden'
+  AND gewicht_kg IS NOT NULL
 GROUP BY geraetegruppe
 ORDER BY anzahl DESC
 
 -- Vergleich Kettenbagger vs Mobilbagger:
 SELECT geraetegruppe,
        COUNT(*) as anzahl,
-       ROUND(AVG((eigenschaften_json->>'gewicht_kg')::numeric)) as avg_gewicht,
-       MIN((eigenschaften_json->>'gewicht_kg')::numeric) as min_gewicht,
-       MAX((eigenschaften_json->>'gewicht_kg')::numeric) as max_gewicht
+       ROUND(AVG(gewicht_kg)) as avg_gewicht,
+       MIN(gewicht_kg) as min_gewicht,
+       MAX(gewicht_kg) as max_gewicht
 FROM geraete
 WHERE geraetegruppe IN ('Kettenbagger', 'Mobilbagger')
-  AND eigenschaften_json->>'gewicht_kg' IS NOT NULL
-  AND eigenschaften_json->>'gewicht_kg' != 'nicht-vorhanden'
+  AND gewicht_kg IS NOT NULL
 GROUP BY geraetegruppe
 
--- Walzen mit Oszillation (JSONB für Boolean!):
-SELECT hersteller, bezeichnung,
-       eigenschaften_json->>'arbeitsbreite_mm' as arbeitsbreite_mm
+-- Walzen mit Oszillation:
+SELECT hersteller, bezeichnung, arbeitsbreite_mm
 FROM geraete
 WHERE geraetegruppe ILIKE '%walze%'
-  AND eigenschaften_json->>'oszillation' = 'true'
+  AND oszillation = true
 
--- Fertiger mit Gasheizung (JSONB für Boolean!):
-SELECT hersteller, bezeichnung,
-       eigenschaften_json->>'einbaubreite_max__m' as einbaubreite_max
+-- Fertiger mit Gasheizung:
+SELECT hersteller, bezeichnung, einbaubreite_mit_verbreiterungen_m
 FROM geraete
 WHERE geraetegruppe ILIKE '%fertiger%'
-  AND eigenschaften_json->>'gas_heizung' = 'true'
+  AND gas_heizung = true
 
 ================================================================================
 WICHTIGE REGELN
@@ -299,9 +293,9 @@ WICHTIGE REGELN
 1. Für Gerätetypen IMMER geraetegruppe verwenden, NICHT kategorie!
 2. verwendung-Filter NUR wenn explizit angefragt!
 3. KEIN LIMIT bei Auflistungs-/Zählabfragen!
-4. BOOLEAN-WERTE ÜBER JSONB: eigenschaften_json->>'feldname' = 'true'
-5. NUMERISCHE WERTE ÜBER JSONB: (eigenschaften_json->>'feldname')::numeric
-6. Bei ALLEN Vergleichen: Prüfe auf 'nicht-vorhanden' UND NULL!
+4. BOOLEAN-SPALTEN DIREKT: klimaanlage = true
+5. NUMERISCHE SPALTEN DIREKT: gewicht_kg > 15000
+6. NULL-Werte prüfen: gewicht_kg IS NOT NULL (für Aggregationen)
 7. TEXT-Spalten (hersteller, geraetegruppe, verwendung) direkt abfragen
 """
 
@@ -318,7 +312,7 @@ SQL_AGENT_SCHEMA = DATABASE_SCHEMA
 ORCHESTRATOR_SCHEMA = """
 DATENBANK-SCHEMA: Tabelle "geraete" (~2400 Baumaschinen)
 
-DIREKTE TEXT-SPALTEN (können direkt abgefragt werden):
+ALLE SPALTEN DIREKT VERFÜGBAR:
 - id: VARCHAR Primary Key
 - hersteller: 124 verschiedene (Caterpillar, Liebherr, Bomag, etc.)
 - geraetegruppe: WICHTIGSTE SPALTE! 122 verschiedene Gruppen
@@ -330,18 +324,18 @@ DIREKTE TEXT-SPALTEN (können direkt abgefragt werden):
 - bezeichnung: Modellname
 - verwendung: 'Vermietung', 'Verkauf', 'Fuhrpark', etc.
 
-eigenschaften_json (JSONB) - ALLE numerischen und boolean Werte!
-- Werte sind TEXT-Strings: '250.0', 'true', 'false', 'nicht-vorhanden'
-- Numerisch: (eigenschaften_json->>'gewicht_kg')::numeric
-- Boolean: eigenschaften_json->>'klimaanlage' = 'true'
-- Felder: gewicht_kg, motor_leistung_kw, klimaanlage, hammerhydraulik, etc.
+NUMERISCHE SPALTEN (direkt):
+- gewicht_kg, motor_leistung_kw, grabtiefe_mm, arbeitsbreite_mm, etc.
+
+BOOLEAN SPALTEN (direkt):
+- klimaanlage, hammerhydraulik, tiltrotator, oszillation, etc.
 
 BEISPIEL-ANFRAGEN:
 - "Liebherr Maschinen" → hersteller = 'Liebherr'
 - "Alle Bagger" → geraetegruppe ILIKE '%bagger%'
 - "Mietmaschinen" → verwendung = 'Vermietung'
-- "Bagger über 15t" → (eigenschaften_json->>'gewicht_kg')::numeric > 15000
-- "Mit Klimaanlage" → eigenschaften_json->>'klimaanlage' = 'true'
+- "Bagger über 15t" → gewicht_kg > 15000
+- "Mit Klimaanlage" → klimaanlage = true
 """
 
 # =============================================================================
