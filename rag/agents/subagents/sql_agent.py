@@ -3,9 +3,10 @@ SQL Generator SubAgent
 
 Generates and executes SQL queries against the PostgreSQL database.
 Uses a fast, non-reasoning model for efficiency.
+Supports both OpenAI and Ollama providers.
 """
 import json
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
 from openai import AsyncOpenAI
 
 from .interface import (
@@ -21,6 +22,7 @@ from .interface import (
 from ...config import config
 from ...postgres import postgres_service, PostgresService
 from ...schema import SQL_AGENT_SCHEMA
+from ...providers import create_llm_client, AsyncOllamaClient
 
 
 # Agent metadata
@@ -122,16 +124,35 @@ WICHTIG:
 
     def __init__(
         self,
-        openai_client: Optional[AsyncOpenAI] = None,
+        openai_client: Optional[Union[AsyncOpenAI, AsyncOllamaClient]] = None,
         model: Optional[str] = None,
         postgres: Optional[PostgresService] = None,
         verbose: bool = False
     ):
         super().__init__(verbose=verbose)
         self._agent_type = AgentType.SQL_GENERATOR
-        self.client = openai_client or AsyncOpenAI(api_key=config.openai_api_key)
-        self.model = model or config.chunking_model or "gpt-4o-mini"
+
+        # Create client if not provided
+        if openai_client is not None:
+            self.client = openai_client
+        else:
+            self.client = create_llm_client(
+                provider=config.llm_provider,
+                api_key=config.openai_api_key,
+                base_url=config.ollama_base_url if config.is_ollama() else None,
+                model=config.ollama_model if config.is_ollama() else None
+            )
+
+        # Use configured model or fall back to config
+        if config.is_ollama():
+            self.model = model or config.get_chat_model()
+        else:
+            self.model = model or config.chunking_model or "gpt-4o-mini"
+
         self.postgres = postgres or postgres_service
+
+        # Detect if using Ollama
+        self._is_ollama = isinstance(self.client, AsyncOllamaClient) or config.is_ollama()
 
     # ==================== TOOLS ====================
 
