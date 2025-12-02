@@ -206,7 +206,9 @@ class AgentSystem:
 
             self._log(f"Processing: {user_query[:50]}...")
 
-            # 3. Orchestrator analyzes and plans
+            # 3. STAGE 1: Orchestrator analyzes query and creates instructions
+            self._log("─" * 40)
+            self._log("STAGE 1: Orchestrator analyzing query...")
             orchestrator = self.get_agent('orchestrator')
             if not orchestrator:
                 return AgentSystemResult(
@@ -235,7 +237,7 @@ class AgentSystem:
 
             self._log(f"Plan: {[p['agent'] for p in agent_plan]}")
 
-            # 4. Handle clarification requests
+            # 4. STAGE 2: Handle clarification requests
             for plan_item in agent_plan:
                 if plan_item["agent"] == "request_clarification":
                     question = plan_item["arguments"].get("question", "")
@@ -255,13 +257,21 @@ class AgentSystem:
                         query_intent="clarification_needed"
                     )
 
-            # 5. Execute sub-agents based on plan
+            # 5. STAGE 3: Execute sub-agents with their specific instructions
+            self._log("─" * 40)
+            self._log("STAGE 2: Sub-agents executing instructions...")
             if self.config.parallel_execution:
                 await self._execute_agents_parallel(context, agent_plan, agents_used, all_sources)
             else:
                 await self._execute_agents_sequential(context, agent_plan, agents_used, all_sources)
 
-            # 6. Reviewer generates final response
+            # 6. STAGE 4: Reviewer gets original query + all results to generate response
+            self._log("─" * 40)
+            self._log("STAGE 3: Reviewer generating response...")
+            self._log(f"  → Original query: {user_query[:60]}...")
+            self._log(f"  → SQL results: {len(context.sql_results) if context.sql_results else 0}")
+            self._log(f"  → Pinecone results: {len(context.pinecone_results) if context.pinecone_results else 0}")
+            self._log(f"  → Web results: {len(context.web_results) if context.web_results else 0}")
             reviewer = self.get_agent('reviewer')
             if not reviewer:
                 return AgentSystemResult(
@@ -473,18 +483,39 @@ class AgentSystem:
         agent_id: str,
         args: Dict[str, Any]
     ):
-        """Set up context metadata for a specific agent"""
+        """
+        Set up context metadata for a specific agent.
+
+        IMPORTANT: Sub-agents receive ONLY specific instructions from the orchestrator.
+        They do NOT have access to the original user query - only the reviewer does.
+        This ensures clean separation of concerns:
+        - Orchestrator: Analyzes query and creates specific instructions
+        - Sub-agents: Execute ONLY their assigned instruction
+        - Reviewer: Combines all results with original query to generate response
+        """
         if agent_id == "sql":
-            context.metadata["sql_task"] = args.get("task_description", context.user_query)
+            # SQL agent gets specific task description - REQUIRED, no fallback
+            instruction = args.get("task_description")
+            if instruction:
+                context.metadata["sql_task"] = instruction
+                self._log(f"  → SQL instruction: {instruction[:80]}...")
             context.metadata["sql_filters"] = args.get("filters", {})
 
         elif agent_id == "pinecone":
-            context.metadata["pinecone_query"] = args.get("search_query", context.user_query)
+            # Pinecone agent gets specific search query - REQUIRED, no fallback
+            instruction = args.get("search_query")
+            if instruction:
+                context.metadata["pinecone_query"] = instruction
+                self._log(f"  → Pinecone instruction: {instruction[:80]}...")
             context.metadata["pinecone_namespace"] = args.get("namespace", "both")
             context.metadata["pinecone_top_k"] = args.get("top_k", 5)
 
         elif agent_id == "web_search":
-            context.metadata["web_query"] = args.get("search_query", context.user_query)
+            # Web search agent gets specific search query - REQUIRED, no fallback
+            instruction = args.get("search_query")
+            if instruction:
+                context.metadata["web_query"] = instruction
+                self._log(f"  → Web Search instruction: {instruction[:80]}...")
             context.metadata["web_search_depth"] = args.get("search_depth", "basic")
             context.metadata["web_max_results"] = args.get("max_results", 3)
 

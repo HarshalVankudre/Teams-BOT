@@ -175,11 +175,18 @@ WICHTIG:
 
     async def _execute(self, context: AgentContext) -> AgentResponse:
         """
-        Generate and execute SQL based on the task description.
+        Generate and execute SQL based on the task description from orchestrator.
+        Sub-agents only execute specific instructions - they don't see the original query.
         """
-        # Extract task from context (set by orchestrator)
-        task_description = context.metadata.get("sql_task", context.user_query)
+        # Extract task from orchestrator instruction ONLY (no fallback to user_query)
+        task_description = context.metadata.get("sql_task")
         filters = context.metadata.get("sql_filters", {})
+
+        if not task_description:
+            return AgentResponse.error_response(
+                error="No task description provided by orchestrator",
+                agent_type=self._agent_type
+            )
 
         # Build the prompt
         prompt = f"Generiere eine SQL-Abfrage für folgende Anfrage:\n\n{task_description}"
