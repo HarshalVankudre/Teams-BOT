@@ -495,11 +495,14 @@ class AgentSystem:
         """
         if agent_id == "sql":
             # SQL agent gets specific task description - REQUIRED, no fallback
-            instruction = args.get("task_description")
+            # Support both old (task_description) and new (sql_task) parameter names
+            instruction = args.get("sql_task") or args.get("task_description")
             if instruction:
                 context.metadata["sql_task"] = instruction
                 self._log(f"  → SQL instruction: {instruction[:80]}...")
             context.metadata["sql_filters"] = args.get("filters", {})
+            if args.get("limit"):
+                context.metadata["limit"] = args.get("limit")
 
         elif agent_id == "pinecone":
             # Pinecone agent gets specific search query - REQUIRED, no fallback
