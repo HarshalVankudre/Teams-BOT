@@ -170,9 +170,10 @@ Antworte jetzt:"""
         }
 
         # Use correct token parameter based on model
-        # Keep responses concise - limit output tokens
+        # GPT-5 uses reasoning tokens internally, so we need more headroom
+        # to ensure output tokens are available after reasoning
         if self._uses_max_completion_tokens():
-            request_params["max_completion_tokens"] = 2000  # Reduced for concise responses
+            request_params["max_completion_tokens"] = 4000  # Extra room for reasoning + output
         else:
             request_params["max_tokens"] = 1500
 
@@ -240,6 +241,15 @@ Antworte jetzt:"""
         """Build context string from all collected data"""
         sections = []
 
+        # Count how many data sources have results (for dynamic limiting)
+        source_count = sum([
+            1 if context.sql_results else 0,
+            1 if context.pinecone_results else 0,
+            1 if context.web_results else 0
+        ])
+        # More sources = more aggressive limiting per source
+        self._multi_source = source_count > 1
+
         # SQL Results
         if context.sql_results:
             sql_section = self._format_sql_results(context.sql_results)
@@ -265,6 +275,9 @@ Antworte jetzt:"""
         if not results:
             return "Keine Ergebnisse"
 
+        # Dynamic limit based on multi-source query
+        max_items = 8 if getattr(self, '_multi_source', False) else 20
+
         # Check if results have query context (new format)
         if results and isinstance(results[0], dict) and "_query_context" in results[0]:
             # Multiple query results with context
@@ -277,14 +290,14 @@ Antworte jetzt:"""
                 section = f"### Abfrage: {query_context}\n"
                 section += f"**{result_count} Ergebnis(se)**\n\n"
 
-                # Format actual results (limit to first 15 per query)
+                # Format actual results with dynamic limit
                 formatted = []
-                for i, row in enumerate(actual_results[:15], 1):
+                for i, row in enumerate(actual_results[:max_items], 1):
                     cleaned = {k: v for k, v in row.items() if v is not None}
                     formatted.append(f"{i}. {json.dumps(cleaned, ensure_ascii=False, default=str)}")
 
-                if len(actual_results) > 15:
-                    formatted.append(f"... und {len(actual_results) - 15} weitere Ergebnisse")
+                if len(actual_results) > max_items:
+                    formatted.append(f"... und {len(actual_results) - max_items} weitere Ergebnisse")
 
                 section += "\n".join(formatted)
                 sections.append(section)
@@ -294,15 +307,15 @@ Antworte jetzt:"""
         # Old format - flat list of results
         summary = f"**{len(results)} Datensätze gefunden**\n\n"
 
-        # Format results (limit to first 20 for context window)
+        # Format results with dynamic limit
         formatted_results = []
-        for i, row in enumerate(results[:20], 1):
+        for i, row in enumerate(results[:max_items], 1):
             # Filter out None values and format
             cleaned = {k: v for k, v in row.items() if v is not None}
             formatted_results.append(f"{i}. {json.dumps(cleaned, ensure_ascii=False, default=str)}")
 
-        if len(results) > 20:
-            formatted_results.append(f"... und {len(results) - 20} weitere")
+        if len(results) > max_items:
+            formatted_results.append(f"... und {len(results) - max_items} weitere")
 
         return summary + "\n".join(formatted_results)
 
@@ -311,18 +324,25 @@ Antworte jetzt:"""
         if not results:
             return "Keine Ergebnisse"
 
+        # Dynamic limit based on multi-source query
+        max_items = 3 if getattr(self, '_multi_source', False) else 10
+        content_limit = 150 if getattr(self, '_multi_source', False) else 300
+
         summary = f"**{len(results)} Ergebnisse gefunden**\n\n"
 
         formatted_results = []
-        for i, result in enumerate(results[:10], 1):
+        for i, result in enumerate(results[:max_items], 1):
             score = result.get("score", 0)
             title = result.get("title", "Unbekannt")
-            content = result.get("content", "")[:300]
+            content = result.get("content", "")[:content_limit]
 
             formatted_results.append(f"""
 {i}. **{title}** (Relevanz: {score:.2%})
 {content}
 """)
+
+        if len(results) > max_items:
+            formatted_results.append(f"... und {len(results) - max_items} weitere")
 
         return summary + "\n".join(formatted_results)
 
@@ -331,19 +351,26 @@ Antworte jetzt:"""
         if not results:
             return "Keine Web-Ergebnisse"
 
+        # Dynamic limit based on multi-source query
+        max_items = 2 if getattr(self, '_multi_source', False) else 5
+        content_limit = 100 if getattr(self, '_multi_source', False) else 200
+
         summary = f"**{len(results)} Web-Ergebnisse** (nur ergänzend verwenden)\n\n"
 
         formatted_results = []
-        for i, result in enumerate(results[:5], 1):
+        for i, result in enumerate(results[:max_items], 1):
             title = result.get("title", "")
             url = result.get("url", "")
-            content = result.get("content", "")[:200]
+            content = result.get("content", "")[:content_limit]
 
             formatted_results.append(f"""
 {i}. **{title}**
 URL: {url}
 {content}
 """)
+
+        if len(results) > max_items:
+            formatted_results.append(f"... und {len(results) - max_items} weitere")
 
         return summary + "\n".join(formatted_results)
 

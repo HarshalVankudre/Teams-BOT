@@ -289,10 +289,14 @@ class PostgresService:
         sql = sql.strip()
         sql_upper = sql.upper()
 
-        # Block dangerous operations
+        # Block dangerous operations - use word boundary check to avoid false positives
+        # e.g., don't block "updated_at" column or "Vermietung" containing substrings
         dangerous_keywords = ['DROP', 'DELETE', 'UPDATE', 'INSERT', 'ALTER', 'TRUNCATE']
         for keyword in dangerous_keywords:
-            if keyword in sql_upper:
+            # Check for standalone keyword (not part of another word)
+            # Pattern: start of string or non-word char, then keyword, then non-word char or end
+            pattern = rf'(^|[^A-Z_]){keyword}([^A-Z_]|$)'
+            if re.search(pattern, sql_upper):
                 print(f"[PostgreSQL] Blocked dangerous SQL: {keyword}")
                 return []
 

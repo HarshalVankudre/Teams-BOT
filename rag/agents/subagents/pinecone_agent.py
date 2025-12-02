@@ -181,13 +181,20 @@ class PineconeSearchAgent(SubAgentBase):
 
     async def _execute(self, context: AgentContext) -> AgentResponse:
         """
-        Perform semantic search based on the query.
+        Perform semantic search based on the orchestrator's instruction.
+        Sub-agents only execute specific instructions - they don't see the original query.
         """
-        # Extract search parameters from context
-        search_query = context.metadata.get("pinecone_query", context.user_query)
+        # Extract search parameters from orchestrator instruction ONLY (no fallback)
+        search_query = context.metadata.get("pinecone_query")
         namespace = context.metadata.get("pinecone_namespace", "both")
         top_k = context.metadata.get("pinecone_top_k", self.default_top_k)
         filters = context.metadata.get("pinecone_filters", None)
+
+        if not search_query:
+            return AgentResponse.error_response(
+                error="No search query provided by orchestrator",
+                agent_type=self._agent_type
+            )
 
         self.log(f"Searching: {search_query[:50]}... in {namespace}")
 

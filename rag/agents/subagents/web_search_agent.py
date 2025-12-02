@@ -202,7 +202,8 @@ class WebSearchAgent(SubAgentBase):
 
     async def _execute(self, context: AgentContext) -> AgentResponse:
         """
-        Perform web search for the given query.
+        Perform web search based on orchestrator's instruction.
+        Sub-agents only execute specific instructions - they don't see the original query.
         """
         if not self.enabled:
             return AgentResponse.success_response(
@@ -215,10 +216,16 @@ class WebSearchAgent(SubAgentBase):
                 reasoning="Web search not available - using internal data only"
             )
 
-        # Extract search parameters
-        search_query = context.metadata.get("web_query", context.user_query)
+        # Extract search parameters from orchestrator instruction ONLY (no fallback)
+        search_query = context.metadata.get("web_query")
         max_results = context.metadata.get("web_max_results", self.max_results)
         search_depth = context.metadata.get("web_search_depth", "basic")
+
+        if not search_query:
+            return AgentResponse.error_response(
+                error="No search query provided by orchestrator",
+                agent_type=self._agent_type
+            )
 
         self.log(f"Searching web: {search_query[:50]}...")
 
