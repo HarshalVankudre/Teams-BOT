@@ -135,13 +135,29 @@ class VerboseAgentSystem:
     """Wrapper around AgentSystem with enhanced logging"""
 
     def __init__(self):
+        import redis.asyncio as redis
         from rag.agents import create_agent_system, AgentRegistry
 
         print_step("Initializing Agent System...")
 
-        # Create system with verbose mode
-        self.system = create_agent_system(verbose=True)
+        # Initialize Redis for conversation persistence
+        self.redis_client = None
+        redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
+        try:
+            self.redis_client = redis.from_url(redis_url, decode_responses=True)
+            print_success(f"Redis connected: {redis_url[:30]}...")
+        except Exception as e:
+            print_info(f"Redis not available ({e}), using in-memory only")
+
+        # Create system with verbose mode and Redis
+        self.system = create_agent_system(verbose=True, redis_client=self.redis_client)
         self.registry = AgentRegistry
+
+        # Generate a session thread_key for conversation continuity
+        import uuid
+        self.session_id = str(uuid.uuid4())[:8]
+        self.thread_key = f"cli_test_user:{self.session_id}"
+        print_info(f"Session thread_key: {self.thread_key}")
 
         print_success("Agent System initialized")
         self._print_registered_agents()
@@ -177,11 +193,12 @@ class VerboseAgentSystem:
         print_step("Phase 1: Context Setup")
         timings['context_setup'] = int((time.time() - phase_start) * 1000)
 
-        # Process through the system
+        # Process through the system with thread_key for conversation continuity
         result = await self.system.process(
             user_query=query,
             user_id='cli_test_user',
-            user_name='CLI Tester'
+            user_name='CLI Tester',
+            thread_key=self.thread_key
         )
 
         total_time = int((time.time() - start_time) * 1000)
@@ -226,6 +243,7 @@ Commands:
   /agents         List all registered agents with details
   /stats          Show session statistics
   /clear          Clear the screen
+  /reset          Reset conversation history (start fresh)
   /verbose on/off Toggle verbose logging
   /help           Show this help message
 
@@ -235,6 +253,12 @@ Example queries:
   - Welche Geraete haben GPS?
   - Empfehle mir einen Bagger fuer schwere Einsaetze
   - Vergleich Kettenbagger vs Mobilbagger
+
+Multi-turn conversation example:
+  You > Wie viele Mietmaschinen haben wir?
+  AI  > Wir haben 794 Mietmaschinen...
+  You > Wie viele davon sind von Bomag?
+  AI  > Von den 794 Mietmaschinen sind 45 von Bomag...
 """)
 
 
@@ -322,6 +346,15 @@ async def main():
 
                 elif cmd == '/clear':
                     clear_screen()
+
+                elif cmd == '/reset':
+                    # Reset conversation history by generating new thread_key
+                    import uuid
+                    old_key = agent_system.thread_key
+                    agent_system.session_id = str(uuid.uuid4())[:8]
+                    agent_system.thread_key = f"cli_test_user:{agent_system.session_id}"
+                    print_success(f"Conversation reset! New session: {agent_system.thread_key}")
+                    print_info(f"Previous session ({old_key}) history cleared from context")
 
                 elif cmd == '/verbose':
                     if args and args[0] in ['on', 'off']:

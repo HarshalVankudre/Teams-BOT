@@ -169,12 +169,10 @@ class PostgresService:
             SELECT
                 id, bezeichnung, hersteller, kategorie, geraetegruppe,
                 seriennummer, inventarnummer, verwendung,
-                eigenschaften_json->>'gewicht_kg' as gewicht_kg,
-                eigenschaften_json->>'motor_leistung_kw' as motor_leistung_kw,
-                eigenschaften_json->>'arbeitsbreite_mm' as arbeitsbreite_mm,
-                eigenschaften_json->>'klimaanlage' as klimaanlage,
-                eigenschaften_json->>'motor_hersteller' as motor_hersteller,
-                eigenschaften_json->>'abgasstufe_eu' as abgasstufe_eu
+                gewicht_kg, motor_leistung_kw, klimaanlage,
+                eigenschaften->'Arbeitsbreite [mm]'->>'wert' as arbeitsbreite_mm,
+                eigenschaften->'Motor - Hersteller'->>'wert' as motor_hersteller,
+                eigenschaften->'Abgasstufe EU'->>'wert' as abgasstufe_eu
             FROM geraete
             WHERE 1=1
         """
@@ -185,7 +183,11 @@ class PostgresService:
             sql += f" AND hersteller ILIKE '%{manufacturer}%'"
         if features:
             for feature, value in features.items():
-                sql += f" AND (eigenschaften_json->>'{feature}')::boolean = {str(value).lower()}"
+                # Check direct boolean columns first, then JSONB
+                if feature in ('klimaanlage', 'zentralschmierung'):
+                    sql += f" AND {feature} = {str(value).lower()}"
+                else:
+                    sql += f" AND eigenschaften ? '{feature}'"
 
         sql += f" ORDER BY hersteller, bezeichnung LIMIT {limit}"
 
@@ -197,7 +199,8 @@ class PostgresService:
             SELECT
                 id, bezeichnung, hersteller, kategorie, geraetegruppe,
                 seriennummer, inventarnummer, verwendung,
-                inhalt, titel, eigenschaften_json
+                gewicht_kg, motor_leistung_kw, klimaanlage, zentralschmierung,
+                eigenschaften
             FROM geraete
             WHERE id = '{equipment_id}'
         """
@@ -223,7 +226,7 @@ class PostgresService:
             SELECT
                 id, bezeichnung, hersteller, kategorie, geraetegruppe,
                 seriennummer, inventarnummer, verwendung,
-                eigenschaften_json
+                gewicht_kg, klimaanlage, eigenschaften
             FROM geraete
             WHERE {' OR '.join(conditions)}
             LIMIT 10
