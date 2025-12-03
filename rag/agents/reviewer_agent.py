@@ -128,6 +128,24 @@ WICHTIG:
                 model_lower.startswith('o1') or
                 model_lower.startswith('o3'))
 
+    def _build_conversation_context(self, context: AgentContext) -> str:
+        """Build conversation history string for context-aware responses"""
+        if not context.conversation_history:
+            return ""
+
+        # Use last 6 messages (3 exchanges) for reviewer context
+        recent_history = context.conversation_history[-6:]
+        if not recent_history:
+            return ""
+
+        history_lines = []
+        for entry in recent_history:
+            role = "Benutzer" if entry.get("role") == "user" else "Assistent"
+            content = entry.get("content", "")[:500]  # Allow longer content for reviewer
+            history_lines.append(f"{role}: {content}")
+
+        return "VORHERIGE KONVERSATION:\n" + "\n".join(history_lines) + "\n\n"
+
     async def _execute(self, context: AgentContext) -> AgentResponse:
         """
         Generate a natural language response from all collected data.
@@ -135,10 +153,13 @@ WICHTIG:
         # Build context from all agent results
         data_context = self._build_data_context(context)
 
+        # Build conversation history context
+        conversation_context = self._build_conversation_context(context)
+
         # Build the review prompt
         prompt = f"""Analysiere die folgenden Daten und erstelle eine hilfreiche Antwort.
 
-URSPRÜNGLICHE FRAGE:
+{conversation_context}AKTUELLE FRAGE:
 {context.user_query}
 
 ORCHESTRATOR-ANALYSE:
@@ -147,10 +168,14 @@ ORCHESTRATOR-ANALYSE:
 {data_context}
 
 AUFGABE:
-1. Analysiere alle gesammelten Daten
-2. Erstelle eine natürliche, hilfreiche Antwort
-3. Formatiere die Antwort übersichtlich
-4. Füge weiterführende Optionen am Ende hinzu
+1. Berücksichtige den Konversationsverlauf bei der Antwort
+2. Analysiere alle gesammelten Daten
+3. Erstelle eine natürliche, hilfreiche Antwort
+4. Formatiere die Antwort übersichtlich
+5. Füge weiterführende Optionen am Ende hinzu
+
+WICHTIG: Wenn sich die Frage auf vorherige Antworten bezieht (z.B. "davon", "diese", "welche davon"),
+beziehe dich auf die vorherige Konversation!
 
 Antworte jetzt:"""
 
@@ -483,45 +508,73 @@ class ResponseFormatter:
                 lines.append(f"- Inventarnummer: {item['inventarnummer']}")
             lines.append("")
 
-        # Technical specs from eigenschaften_json
-        props = item.get("eigenschaften_json", {})
+        # Technical specs - check both direct columns and eigenschaften JSONB
+        has_specs = False
+        spec_lines = []
+
+        # Direct numeric columns
+        direct_specs = [
+            ("gewicht_kg", "Gewicht", "kg"),
+            ("motor_leistung_kw", "Motorleistung", "kW"),
+            ("breite_mm", "Breite", "mm"),
+            ("hoehe_mm", "Höhe", "mm"),
+            ("laenge_mm", "Länge", "mm"),
+        ]
+        for key, label, unit in direct_specs:
+            val = item.get(key)
+            if val and val not in ["nicht-vorhanden", ""]:
+                spec_lines.append(f"- {label}: {val} {unit}")
+                has_specs = True
+
+        # JSONB eigenschaften (new format: {"Name": {"wert": val, "einheit": unit}})
+        props = item.get("eigenschaften", {}) or item.get("eigenschaften_json", {})
         if isinstance(props, str):
             try:
                 props = json.loads(props)
             except:
                 props = {}
 
-        if props:
-            lines.append("**Technische Daten:**")
-            spec_order = [
-                ("gewicht_kg", "Gewicht", "kg"),
-                ("motor_leistung_kw", "Motorleistung", "kW"),
-                ("breite_mm", "Breite", "mm"),
-                ("hoehe_mm", "Höhe", "mm"),
-                ("laenge_mm", "Länge", "mm"),
-                ("grabtiefe_mm", "Grabtiefe", "mm"),
-                ("arbeitsbreite_mm", "Arbeitsbreite", "mm"),
-            ]
-            for key, label, unit in spec_order:
-                if props.get(key) and props[key] not in ["nicht-vorhanden", ""]:
-                    lines.append(f"- {label}: {props[key]} {unit}")
+        # Extract additional specs from JSONB
+        jsonb_specs = [
+            ("Grabtiefe [mm]", "Grabtiefe", "mm"),
+            ("Arbeitsbreite [mm]", "Arbeitsbreite", "mm"),
+        ]
+        for key, label, unit in jsonb_specs:
+            prop = props.get(key, {})
+            if isinstance(prop, dict):
+                val = prop.get("wert")
+                if val and val not in ["nicht-vorhanden", "", "Ja"]:
+                    spec_lines.append(f"- {label}: {val} {unit}")
+                    has_specs = True
 
-            # Boolean features
-            features = []
-            feature_labels = {
-                "klimaanlage": "Klimaanlage",
-                "schnellwechsler": "Schnellwechsler",
-                "gps": "GPS",
-                "rueckfahrkamera": "Rückfahrkamera",
-                "hammerhydraulik": "Hammerhydraulik",
-                "zentralschmierung": "Zentralschmierung"
-            }
-            for key, label in feature_labels.items():
-                if props.get(key) == "true":
+        if has_specs:
+            lines.append("**Technische Daten:**")
+            lines.extend(spec_lines)
+
+        # Boolean features - check both direct columns and JSONB
+        features = []
+
+        # Direct boolean columns
+        if item.get("klimaanlage") is True:
+            features.append("Klimaanlage")
+        if item.get("zentralschmierung") is True:
+            features.append("Zentralschmierung")
+
+        # JSONB boolean features (have {"wert": "Ja"})
+        jsonb_features = {
+            "Hammerhydraulik": "Hammerhydraulik",
+            "Schnellwechsler (hydr.)": "Schnellwechsler",
+            "Oszillation": "Oszillation",
+            "Tiltrotator": "Tiltrotator",
+        }
+        for key, label in jsonb_features.items():
+            prop = props.get(key, {})
+            if isinstance(prop, dict) and prop.get("wert") == "Ja":
+                if label not in features:
                     features.append(label)
 
-            if features:
-                lines.append(f"\n**Ausstattung:** {', '.join(features)}")
+        if features:
+            lines.append(f"\n**Ausstattung:** {', '.join(features)}")
 
         return "\n".join(lines)
 

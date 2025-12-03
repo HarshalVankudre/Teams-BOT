@@ -1,14 +1,17 @@
 """
-PostgreSQL Database Schema for RÜKO Equipment Database
+PostgreSQL Database Schema for RUKO Equipment Database
 
 This is the SINGLE SOURCE OF TRUTH for the database schema.
 All agents and services should import from here.
 
 Table: geraete (Baumaschinen/Construction Equipment)
-Total Records: ~2400
+Total Records: 2395
 
-CRITICAL: All numeric and boolean values are stored ONLY in eigenschaften_json (JSONB)!
-The direct columns exist but are EMPTY (NULL). Always use JSONB access patterns.
+Schema rebuilt from raw SEMA export (2024-12-03):
+- id: BIGINT PRIMARY KEY (SEMA primaryKey)
+- Direct columns for basic equipment info
+- eigenschaften: JSONB for all technical properties
+- Common numeric/boolean columns extracted for fast queries
 """
 
 # =============================================================================
@@ -20,283 +23,185 @@ DATABASE_SCHEMA = """
 DATENBANK-SCHEMA: Tabelle "geraete" (Baumaschinen-Inventar)
 ================================================================================
 
-DATENSTRUKTUR (nach Migration v1.2):
-- TEXT-Spalten (hersteller, geraetegruppe, etc.): Direkte Werte
-- NUMERISCHE Spalten: Jetzt direkt verfügbar (gewicht_kg, motor_leistung_kw, etc.)
-- BOOLEAN Spalten: Jetzt direkt verfügbar (klimaanlage, hammerhydraulik, etc.)
-- eigenschaften_json (JSONB): Backup/Fallback, enthält auch 'nicht-vorhanden' Marker
+Schema basiert auf SEMA Raw-Export mit 2395 Geraeten.
+Jedes Geraet hat eine eindeutige ID (SEMA primaryKey).
 
 ================================================================================
-IDENTIFIKATION (VARCHAR/TEXT)
+IDENTIFIKATION
 ================================================================================
-- id: VARCHAR PRIMARY KEY (z.B. "sema_12535521")
-- primaerschluessel: BIGINT - Primärschlüssel aus SEMA
-- seriennummer: VARCHAR - Seriennummer des Geräts
-- inventarnummer: VARCHAR - Interne Inventarnummer
-- bezeichnung: VARCHAR - Modellname (z.B. "CAT 320", "HC 130i")
-- titel: VARCHAR - Titel/Kurzbeschreibung
-- inhalt: TEXT - Volltext-Beschreibung
+- id: BIGINT PRIMARY KEY (SEMA primaryKey, z.B. 67251777)
+- bezeichnung: TEXT NOT NULL - Modellname (z.B. "BW 174 AP-5 AM", "CAT 320")
+- seriennummer: TEXT - Seriennummer (1286 eindeutige)
+- inventarnummer: TEXT - Interne Inventarnummer
 
 ================================================================================
-KLASSIFIKATION (VARCHAR)
+KLASSIFIKATION
 ================================================================================
-- hersteller: VARCHAR - 124 verschiedene Hersteller!
-  Häufige: 'Caterpillar', 'Liebherr', 'Bomag', 'Vögele', 'Hamm', 'Wirtgen',
-           'Kubota', 'Volvo', 'Hitachi', 'Komatsu', 'Dynapac', 'Ammann',
-           'Wacker Neuson', 'Yanmar', 'Takeuchi', 'Hyundai', 'JCB'
-- hersteller_code: VARCHAR - Herstellercode (z.B. "HAM", "CAT")
+- hersteller: TEXT - ACHTUNG: Meist einfache Namen, ABER manche haben 'CODE - Name' Format!
+  Einfach: 'Caterpillar', 'Liebherr', 'Bomag', 'Volvo', 'Wirtgen'
+  Mit Code: 'VÖG - Vögele' (283), '??? - Sonstige' (65)
+  EMPFEHLUNG: Immer ILIKE '%suchbegriff%' verwenden!
+- hersteller_code: TEXT - z.B. 'CAT', 'LIE', 'BOM', 'VÖG'
 
-- geraetegruppe: VARCHAR - WICHTIGSTE SPALTE! 122 verschiedene Gruppen!
-  Bagger: 'Mobilbagger', 'Kettenbagger', 'Minibagger (0,0 to - 4,4 to)',
-          'Kompaktbagger (4,5 to - 10,9 to)'
-  Walzen: 'Tandemwalze', 'Walzenzug (Glattmantel)', 'Walzenzug (Schaffuß)',
-          'Gummiradwalze', 'Grabenwalze', 'Kombiwalze'
+- geraetegruppe: TEXT - WICHTIGSTE SPALTE! z.B.:
+  Bagger: 'Mobilbagger', 'Kettenbagger', 'Minibagger (0,0 to - 4,4 to)'
+  Walzen: 'Tandemwalze', 'Walzenzug (Glattmantel)', 'Gummiradwalze'
   Fertiger: 'Radfertiger', 'Kettenfertiger', 'Beschicker'
-  Fräsen: 'Kaltfräse (Kette)', 'Kaltfräse (Rad)', 'Anbaufräse', 'Grabenfräse'
-  Krane: 'Autokran', 'Telekran (Kette)', 'Telekran (Rad)', 'Miniraupenkran'
-  Lader: 'Radlader', 'Teleskoplader (starr)', 'Kettendumper', 'Raddumper'
-  Löffel: 'Tieflöffel', 'Grabenräumlöffel (starr)', 'Sieblöffel', etc.
-- geraetegruppe_code: VARCHAR - Gerätegruppen-Code
+  Fraesen: 'Kaltfraese (Kette)', 'Kaltfraese (Rad)', 'Anbaufraese'
+- geraetegruppe_code: TEXT - z.B. '5.6030.000', '2.2010.000'
 
-- kategorie: VARCHAR - 8 Oberkategorien (kann NULL sein!)
-  Werte: 'bagger', 'lader', 'verdichter', 'fertiger', 'fraese', 'kran',
-         'einbauunterstuetzung', 'transportfahrzeug'
-  ACHTUNG: Oft NULL - geraetegruppe ist zuverlässiger!
+- kategorie: TEXT - Oberkategorie (abgeleitet aus geraetegruppe_code):
+  'bagger', 'anbaugeraet', 'verdichter', 'beschicker', 'fertiger',
+  'fraese', 'kran', 'lader', 'dumper', 'sonstige'
 
-- verwendung: VARCHAR - Verwendungszweck
-  Werte: 'Vermietung', 'Verkauf', 'Fuhrpark', 'Externes Gerät', 'keine'
-  WICHTIG: NUR filtern wenn explizit angefragt!
-- verwendung_code: VARCHAR
+- verwendung: TEXT - Werte und ihre Codes:
+  'Vermietung' (MIET) - 794 Geraete
+  'Verkauf' (VK) - 1371 Geraete
+  'Fuhrpark' (FP) - 8 Geraete
+  'Externes Geraet' (EXG) - 221 Geraete
+- verwendung_code: TEXT - 'MIET', 'VK', 'FP', 'EXG'
 
-================================================================================
-ARRAY SPALTEN
-================================================================================
-- einsatzgebiete: TEXT[] - Array mit Einsatzgebieten
-- gelaendetypen: TEXT[] - Array mit Geländetypen
-- typische_aufgaben: TEXT[] - Array mit typischen Aufgaben
-- geeignet_fuer: TEXT - Geeignet für (Freitext)
+- abrechnungsgruppe: TEXT - Format: 'CODE - Beschreibung'
+  z.B. '4.3030.010 - Bohlenverbreiterungen fuer Fertiger'
+  WICHTIG: Immer ILIKE '%suchbegriff%' verwenden!
 
-================================================================================
-NUMERISCHE SPALTEN (DOUBLE PRECISION) - DIREKT VERFÜGBAR!
-================================================================================
-
-WICHTIG: Nach Migration sind numerische Werte als DIREKTE SPALTEN verfügbar!
-Zugriff: gewicht_kg > 15000 (direkt, kein JSONB nötig)
-NULL-Werte: Wo JSONB 'nicht-vorhanden' hatte, ist die Spalte NULL
-
-Abmessungen & Gewicht:
-- gewicht_kg: Betriebsgewicht in kg
-- breite_mm: Breite in mm
-- hoehe_mm: Höhe in mm
-- laenge_mm: Länge in mm
-
-Motor & Leistung:
-- motor_leistung_kw: Motorleistung in kW
-- fahrgeschwindigkeit_km_h: Max. Geschwindigkeit
-
-Bagger-spezifisch:
-- grabtiefe_mm: Grabtiefe
-- loeffelstiel_mm: Löffelstiel-Länge
-- anzahl_zaehne: Anzahl Zähne
-
-Walzen & Verdichter:
-- arbeitsbreite_mm: Arbeitsbreite
-- verdichtungsleistung_kg: Verdichtungsleistung
-- steigfaehigkeit_mit_vibration__pct: Steigfähigkeit mit Vibration %
-- steigfaehigkeit_ohne_vibration__pct: Steigfähigkeit ohne Vibration %
-
-Fertiger:
-- einbaubreite_max__m: Max. Einbaubreite
-- einbaubreite_mit_verbreiterungen_m: Einbaubreite mit Verbreiterungen
-- durchsatzmenge_t_h: Durchsatzmenge t/h
-- foerderkapazitaet_t_h: Förderkapazität t/h
-- bandbreite_mm: Bandbreite
-
-Fräsen:
-- fraesbreite_mm: Fräsbreite
-- fraestiefe_mm: Frästiefe
-- schnittbreite_mm: Schnittbreite
-
-Krane:
-- ausladung_m: Ausladung
-- ausleger_m: Auslegerlänge
-- hakenhoehe_m: Hakenhöhe
-- tragkraft_max__kg: Max. Tragkraft
-- ballast_t: Ballast in Tonnen
-
-Sonstige:
-- nutzlast_kg: Nutzlast
-- stuetzlast_kg: Stützlast
-- inhalt_m3: Inhalt in m³
-- muldenvolumen_m3: Muldenvolumen
-- arbeitsdruck_bar: Arbeitsdruck
-- druck_bar: Druck
-- zul__reisskraft_knm: Zul. Reißkraft
-- bodenplatten_mm: Bodenplatten
-- kantenschneidgeraet_stueck: Kantenschneidgerät Anzahl
+- kostenstelle: TEXT - Format: 'CODE - Name'
+  '100 - Handel' (1462 Geraete)
+  '200 - Mietpark' (854 Geraete)
+  '90000 - Fuhrpark' (9 Geraete)
+  WICHTIG: Fuer Code-Suche ILIKE '200%' verwenden, NICHT '200-' oder '200'!
 
 ================================================================================
-BOOLEAN SPALTEN - DIREKT VERFÜGBAR!
+EXTRAHIERTE NUMERISCHE SPALTEN (direkt abfragbar)
 ================================================================================
+Haeufig abgefragte Werte sind als direkte Spalten verfuegbar:
 
-WICHTIG: Nach Migration sind Boolean-Werte als DIREKTE SPALTEN verfügbar!
-Zugriff: klimaanlage = true (direkt, kein JSONB nötig)
-NULL-Werte: Wo JSONB 'nicht-vorhanden' hatte, ist die Spalte NULL
+- breite_mm: NUMERIC - Breite in mm
+- hoehe_mm: NUMERIC - Hoehe in mm
+- laenge_mm: NUMERIC - Laenge in mm
+- gewicht_kg: NUMERIC - Betriebsgewicht in kg
+- motor_leistung_kw: NUMERIC - Motorleistung in kW
 
-Antrieb & Fahrwerk:
-- allradantrieb, allradlenkung, knicklenkung
-- dieselmotor, motor_diesel, motor_benzin
-- dieselpartikelfilter, elektrostarter
-
-Kabine & Komfort:
-- kabine, klimaanlage, hochfahrbare_kabine, wetterschutzdach
-
-Hydraulik & Anbaugeräte:
-- hammerhydraulik, greiferhydraulik, scherenhydraulik
-- greiferdreheinrichtung, schnellwechsler_mech_, schnellwechsler_hydr_
-- tiltrotator, powertilt, zentralschmierung, bio_hydraulikoel
-
-Ausleger & Abstützung:
-- monoausleger, verstellausleger, seitenknickausleger, teleskopausleger
-- pratzenabstuetzung, schildabstuetzung
-
-Walzen & Verdichter:
-- oszillation, verdichtungsmesser, geteilte_bandage, anbauplattenverdichter
-
-Fertiger:
-- gas_heizung, e_heizung, temperaturmessung_asphalt
-- truck_assist, schwenkband, splittstreuer
-
-Fräsen:
-- absauganlage, reversierbar
-
-Steuerung & Elektronik:
-- vorruestung_2d_steuerung, vorruestung_3d_steuerung
-- vorruestung_navitronic, vorruestung_voelkel
-- vm_38_schnittstelle, distanzkontrolle_automatisch
-- asphaltmanager, funkfernsteuerung, abb_arbeitsbereichsbegrenzung
-
-Krane & Transport:
-- gabelaufnahme_beschickerkuebel
-- rampen_hydraulisch, rampen_mechanisch
-- muldenerhoehung, muldenheizung, schnellgang
+Zugriff: WHERE gewicht_kg > 15000
 
 ================================================================================
-TEXT SPALTEN (zusätzliche Eigenschaften)
+EXTRAHIERTE BOOLEAN SPALTEN (direkt abfragbar)
 ================================================================================
-- abgasstufe_eu: 'Stufe III', 'Stufe IV', 'Stufe V', etc.
-- abgasstufe_usa: US-Abgasstufe
-- motor_hersteller: 'Deutz', 'Cummins', 'Kubota', 'Perkins'
-- motor_typ: Motortyp
-- motor_elektro: Elektromotor-Info
-- getriebe_art: Getriebeart
-- getriebe_typ: Getriebetyp
-- reifengroesse: Reifengröße
-- farbe: Farbe
-- batterie_typ: Batterietyp
-- fuehrerscheinklasse: Führerscheinklasse
-- bohle_typ: Bohlentyp
-- winde_typ: Windentyp
-- turmsystem_typ: Turmsystem-Typ
-- schnellwechsler_typ: Schnellwechsler-Typ
-- schnellwechsler_oilquick: OilQuick-Info
-- schnellwechsler_henle: Henle-Info
-- wechselhaltersystem_typ: Wechselhaltersystem
-- zahntyp: Zahntyp
-- empf__baggerklasse_t: Empfohlene Baggerklasse
-- fraesmeissel_anzahl: Fräsmeißel Anzahl
-- level_pro: Level Pro Info
-- absauganlage_vcs: VCS Absauganlage
-- fcs_flexible_cutter_system: FCS System
-- walzendrehvorrichtung: Walzendrehvorrichtung
-- einbaustaerke_mm: Einbaustärke
-- einbaubreite_grundbohle_m: Grundbohle Einbaubreite
-- frequenz_hz: Frequenz
-- durchflussmenge_l_min: Durchflussmenge
-- gegengewicht_t: Gegengewicht
-- tragkraft_an_der_spitze_kg: Tragkraft Spitze
-- co2_emissionen_g_km: CO2 Emissionen
-- umweltplakette_de: Umweltplakette
-- dachprofilverstellung: Dachprofilverstellung
-- wegmessesensoren_zylinder: Wegmesssensoren
-- einbau_von_hgt_schotter: HGT Schotter Einbau
+- klimaanlage: BOOLEAN
+- zentralschmierung: BOOLEAN
+
+Zugriff: WHERE klimaanlage = true
 
 ================================================================================
-JSONB SPALTE: eigenschaften_json
+JSONB SPALTE: eigenschaften
 ================================================================================
-Enthält weitere Key-Value Paare die nicht als direkte Spalten existieren.
-Zugriff: eigenschaften_json->>'feldname'
+Alle technischen Eigenschaften aus SEMA als JSONB gespeichert.
+
+Format: {"Eigenschaft Name": {"wert": "Wert", "einheit": "Einheit"}}
+
+Beispiele:
+  {"Klimaanlage": {"wert": "Ja", "einheit": null}}
+  {"Arbeitsbreite [mm]": {"wert": "1700", "einheit": "mm"}}
+  {"Motor - Leistung [kW]": {"wert": "85", "einheit": "kW"}}
+  {"Oszillation": {"wert": "Ja", "einheit": null}}
+
+JSONB-Zugriff:
+  -- Pruefen ob Eigenschaft existiert (Boolean):
+  eigenschaften ? 'Klimaanlage'
+
+  -- Wert einer Eigenschaft:
+  eigenschaften->'Klimaanlage'->>'wert' = 'Ja'
+
+  -- Numerischen Wert extrahieren:
+  (eigenschaften->'Arbeitsbreite [mm]'->>'wert')::numeric > 1500
+
+Haeufige Eigenschaften in JSONB:
+  Boolean (Wert: 'Ja'):
+    - Klimaanlage, Zentralschmierung, Hammerhydraulik
+    - Oszillation, Verdichtungsmesser, Allradantrieb
+    - Dieselpartikelfilter, Kabine, Gas-Heizung
+    - Tiltrotator, Powertilt, Schnellwechsler (hydr.)
+
+  Numerisch:
+    - Gewicht [kg], Breite [mm], Hoehe [mm], Laenge [mm]
+    - Motor - Leistung [kW], Arbeitsbreite [mm]
+    - Grabtiefe [mm], Loeffelstiel [mm]
+    - Fraesbreite [mm], Fraestiefe [mm]
+    - Ausladung [m], Ausleger [m], Hakenhoehe [m]
 
 ================================================================================
 TIMESTAMPS
 ================================================================================
 - created_at: TIMESTAMP - Erstellungsdatum
-- updated_at: TIMESTAMP - Letzte Aktualisierung
 
 ================================================================================
 SQL-BEISPIELE
 ================================================================================
 
--- Alle Bagger zählen (geraetegruppe verwenden!):
+-- Alle Bagger zaehlen:
 SELECT COUNT(*) FROM geraete WHERE geraetegruppe ILIKE '%bagger%'
 
--- Alle Mietmaschinen (KEIN LIMIT bei "alle" Anfragen!):
-SELECT hersteller, bezeichnung, geraetegruppe
+-- Liebherr Maschinen auflisten:
+SELECT bezeichnung, geraetegruppe, seriennummer
 FROM geraete
-WHERE verwendung = 'Vermietung'
+WHERE hersteller = 'Liebherr'
 
--- Bagger über 15t mit Klimaanlage (DIREKTE Spalten!):
-SELECT hersteller, bezeichnung, gewicht_kg
+-- Bagger ueber 15t mit Klimaanlage:
+SELECT bezeichnung, hersteller, gewicht_kg
 FROM geraete
 WHERE geraetegruppe ILIKE '%bagger%'
   AND gewicht_kg > 15000
   AND klimaanlage = true
-ORDER BY gewicht_kg DESC
 
--- Durchschnittsgewicht nach Gerätegruppe:
-SELECT geraetegruppe,
-       COUNT(*) as anzahl,
-       ROUND(AVG(gewicht_kg)) as avg_gewicht
-FROM geraete
-WHERE geraetegruppe ILIKE '%bagger%'
-  AND gewicht_kg IS NOT NULL
-GROUP BY geraetegruppe
-ORDER BY anzahl DESC
-
--- Vergleich Kettenbagger vs Mobilbagger:
-SELECT geraetegruppe,
-       COUNT(*) as anzahl,
-       ROUND(AVG(gewicht_kg)) as avg_gewicht,
-       MIN(gewicht_kg) as min_gewicht,
-       MAX(gewicht_kg) as max_gewicht
-FROM geraete
-WHERE geraetegruppe IN ('Kettenbagger', 'Mobilbagger')
-  AND gewicht_kg IS NOT NULL
-GROUP BY geraetegruppe
-
--- Walzen mit Oszillation:
-SELECT hersteller, bezeichnung, arbeitsbreite_mm
+-- Walzen mit Oszillation (via JSONB):
+SELECT bezeichnung, hersteller
 FROM geraete
 WHERE geraetegruppe ILIKE '%walze%'
-  AND oszillation = true
+  AND eigenschaften ? 'Oszillation'
 
--- Fertiger mit Gasheizung:
-SELECT hersteller, bezeichnung, einbaubreite_mit_verbreiterungen_m
+-- Fertiger mit Gas-Heizung (via JSONB):
+SELECT bezeichnung, hersteller
 FROM geraete
 WHERE geraetegruppe ILIKE '%fertiger%'
-  AND gas_heizung = true
+  AND eigenschaften->'Gas-Heizung'->>'wert' = 'Ja'
+
+-- Mietmaschinen:
+SELECT hersteller, bezeichnung, geraetegruppe
+FROM geraete
+WHERE verwendung = 'Vermietung'
+
+-- Geraete nach Kostenstelle (ILIKE fuer Code-Suche!):
+SELECT COUNT(*) FROM geraete WHERE kostenstelle ILIKE '200%'
+-- Ergebnis: 854 (findet '200 - Mietpark')
+-- FALSCH: WHERE kostenstelle = '200' (findet nichts!)
+
+-- Voegele Maschinen (Hersteller mit Code-Format):
+SELECT COUNT(*) FROM geraete WHERE hersteller ILIKE '%voegele%' OR hersteller ILIKE '%VÖG%'
+-- Ergebnis: 283
 
 ================================================================================
 WICHTIGE REGELN
 ================================================================================
-
-1. Für Gerätetypen IMMER geraetegruppe verwenden, NICHT kategorie!
+1. Fuer Geraetetypen IMMER geraetegruppe verwenden, NICHT kategorie!
 2. verwendung-Filter NUR wenn explizit angefragt!
-3. KEIN LIMIT bei Auflistungs-/Zählabfragen!
-4. BOOLEAN-SPALTEN DIREKT: klimaanlage = true
-5. NUMERISCHE SPALTEN DIREKT: gewicht_kg > 15000
-6. NULL-Werte prüfen: gewicht_kg IS NOT NULL (für Aggregationen)
-7. TEXT-Spalten (hersteller, geraetegruppe, verwendung) direkt abfragen
+3. KEIN LIMIT bei Auflistungs-/Zaehlabfragen!
+4. Direkte Spalten wenn verfuegbar: gewicht_kg, klimaanlage
+5. JSONB fuer alle anderen Eigenschaften
+6. NULL-Werte pruefen bei Aggregationen: gewicht_kg IS NOT NULL
+
+================================================================================
+ILIKE-REGEL (SEHR WICHTIG!)
+================================================================================
+Viele Spalten haben 'CODE - Name' Format. Bei Suche nach Code/Teilstring:
+- FALSCH: WHERE kostenstelle = '200' (findet nichts!)
+- RICHTIG: WHERE kostenstelle ILIKE '200%' (findet '200 - Mietpark')
+
+Spalten mit 'CODE - Name' Format:
+- kostenstelle: '100 - Handel', '200 - Mietpark', '90000 - Fuhrpark'
+- abrechnungsgruppe: '4.3030.010 - Bohlenverbreiterungen...'
+- hersteller (teilweise): 'VÖG - Vögele', '??? - Sonstige'
+
+Bei Unsicherheit IMMER ILIKE '%suchbegriff%' verwenden!
 """
 
 # =============================================================================
@@ -310,32 +215,34 @@ SQL_AGENT_SCHEMA = DATABASE_SCHEMA
 # =============================================================================
 
 ORCHESTRATOR_SCHEMA = """
-DATENBANK-SCHEMA: Tabelle "geraete" (~2400 Baumaschinen)
+DATENBANK-SCHEMA: Tabelle "geraete" (2395 Baumaschinen)
 
-ALLE SPALTEN DIREKT VERFÜGBAR:
-- id: VARCHAR Primary Key
-- hersteller: 124 verschiedene (Caterpillar, Liebherr, Bomag, etc.)
-- geraetegruppe: WICHTIGSTE SPALTE! 122 verschiedene Gruppen
-  Bagger: 'Mobilbagger', 'Kettenbagger', 'Minibagger (0,0 to - 4,4 to)'
-  Walzen: 'Tandemwalze', 'Walzenzug', 'Gummiradwalze'
-  Fertiger: 'Radfertiger', 'Kettenfertiger'
-  Fräsen: 'Kaltfräse (Kette)', 'Kaltfräse (Rad)'
-- kategorie: 8 Oberkategorien (oft NULL!)
-- bezeichnung: Modellname
-- verwendung: 'Vermietung', 'Verkauf', 'Fuhrpark', etc.
+DIREKTE SPALTEN:
+- id: BIGINT Primary Key (SEMA primaryKey)
+- bezeichnung: Modellname (z.B. "CAT 320", "BW 174 AP-5 AM")
+- hersteller: z.B. 'Caterpillar', 'Liebherr', 'Bomag'
+- geraetegruppe: WICHTIGSTE SPALTE! z.B. 'Mobilbagger', 'Tandemwalze'
+- kategorie: Oberkategorie (oft NULL - geraetegruppe bevorzugen!)
+- verwendung: 'Vermietung', 'Verkauf', 'Fuhrpark'
+- seriennummer, inventarnummer
 
 NUMERISCHE SPALTEN (direkt):
-- gewicht_kg, motor_leistung_kw, grabtiefe_mm, arbeitsbreite_mm, etc.
+- gewicht_kg, motor_leistung_kw, breite_mm, hoehe_mm, laenge_mm
 
 BOOLEAN SPALTEN (direkt):
-- klimaanlage, hammerhydraulik, tiltrotator, oszillation, etc.
+- klimaanlage, zentralschmierung
+
+JSONB (eigenschaften):
+- Alle anderen Eigenschaften: Oszillation, Hammerhydraulik, etc.
+- Format: {"Name": {"wert": "Wert", "einheit": "..."}}
 
 BEISPIEL-ANFRAGEN:
-- "Liebherr Maschinen" → hersteller = 'Liebherr'
-- "Alle Bagger" → geraetegruppe ILIKE '%bagger%'
-- "Mietmaschinen" → verwendung = 'Vermietung'
-- "Bagger über 15t" → gewicht_kg > 15000
-- "Mit Klimaanlage" → klimaanlage = true
+- "Liebherr Maschinen" -> hersteller = 'Liebherr'
+- "Alle Bagger" -> geraetegruppe ILIKE '%bagger%'
+- "Mietmaschinen" -> verwendung = 'Vermietung'
+- "Bagger ueber 15t" -> gewicht_kg > 15000
+- "Mit Klimaanlage" -> klimaanlage = true
+- "Walzen mit Oszillation" -> eigenschaften ? 'Oszillation'
 """
 
 # =============================================================================
@@ -344,21 +251,21 @@ BEISPIEL-ANFRAGEN:
 
 HERSTELLER_VALUES = [
     'ABG', 'Ahlmann', 'AL-KO', 'Ammann', 'Atlas', 'Atlas-Copco', 'AUGER TORQUE',
-    'Baumgärtner', 'Bema', 'Bergmann', 'Boart Longyear', 'Bomag', 'Breining',
+    'Baumgaertner', 'Bema', 'Bergmann', 'Boart Longyear', 'Bomag', 'Breining',
     'Brian James Trailers', 'Cardi', 'Caterpillar', 'Cedima', 'Compair', 'Containex',
     'CP', 'Demag', 'Ditch Witch', 'DMS', 'Dynapac', 'Egli', 'Endress', 'Engcon',
-    'Epiroc', 'Ford', 'Format', 'Furukawa', 'GEKO', 'Genie', 'GRÜN GmbH', 'Grünig',
+    'Epiroc', 'Ford', 'Format', 'Furukawa', 'GEKO', 'Genie', 'GRUEN GmbH', 'Gruenig',
     'Hamm', 'HBM NOBAS', 'Henle', 'Heylo', 'HIMOINSA', 'Hitachi', 'HKS', 'Hufgard',
     'Hulco', 'Hydraulikgreifer-Technologie GmbH', 'Hydrema', 'Hyster', 'Hyundai',
     'JCB', 'John Deere', 'Jungheinrich', 'Kaeser', 'Kinshofer', 'Kleemann', 'Kobelco',
-    'Komatsu', 'Korte', 'Kramer Allrad', 'Kränzle', 'Kroll', 'Krupp', 'KSG', 'Ksw',
+    'Komatsu', 'Korte', 'Kramer Allrad', 'Kraenzle', 'Kroll', 'Krupp', 'KSG', 'Ksw',
     'Kubota', 'Kwanglim', 'Lehnhoff', 'Liebherr', 'MAEDA', 'MAN', 'Manitou', 'MBU',
-    'McCloskey', 'Mercedes-Benz', 'Merlo', 'Moba', 'MTS', 'Müller Mitteltal', 'Neuson',
+    'McCloskey', 'Mercedes-Benz', 'Merlo', 'Moba', 'MTS', 'Mueller Mitteltal', 'Neuson',
     'New Holland', 'Niftylift', 'Nilfisk Alto', 'NOZAR', 'Oilquick', 'O&K', 'Opel',
-    'Paus', 'Potain', 'Rammax', 'Renault', 'Reschke', 'Rototilt', 'RÜKO', 'Schaeff',
+    'Paus', 'Potain', 'Rammax', 'Renault', 'Reschke', 'Rototilt', 'RUEKO', 'Schaeff',
     'Sennebogen', 'Sitech', 'Skoda', 'SMP', 'Sobernheimer', 'Sonstige', 'Steelwrist',
-    'Stehr', 'Stihl', 'Straßmayr', 'Streumaster', 'Takeuchi', 'Tesla', 'Theis',
-    'Thwaites', 'Tracto-Technik', 'Trimble', 'TS Industrie', 'Tuchel', 'Vögele',
+    'Stehr', 'Stihl', 'Strassmayr', 'Streumaster', 'Takeuchi', 'Tesla', 'Theis',
+    'Thwaites', 'Tracto-Technik', 'Trimble', 'TS Industrie', 'Tuchel', 'Voegele',
     'Volkswagen', 'Volvo', 'Wacker Neuson', 'Weber mt', 'Weber Stahl', 'Weiro',
     'Wirtgen', 'Yanmar', 'Zeppelin', 'ZFE GmbH'
 ]
@@ -368,73 +275,111 @@ GERAETEGRUPPE_VALUES = [
     'Mobilbagger', 'Kettenbagger', 'Minibagger (0,0 to - 4,4 to)',
     'Kompaktbagger (4,5 to - 10,9 to)',
     # Walzen
-    'Tandemwalze', 'Walzenzug (Glattmantel)', 'Walzenzug (Schaffuß)',
+    'Tandemwalze', 'Walzenzug (Glattmantel)', 'Walzenzug (Schaffuss)',
     'Gummiradwalze', 'Grabenwalze', 'Kombiwalze',
     # Fertiger
     'Radfertiger', 'Kettenfertiger', 'Beschicker',
-    # Fräsen
-    'Kaltfräse (Kette)', 'Kaltfräse (Rad)', 'Anbaufräse', 'Grabenfräse', 'Anbaugrabenfräse',
+    # Fraesen
+    'Kaltfraese (Kette)', 'Kaltfraese (Rad)', 'Anbaufraese', 'Grabenfraese', 'Anbaugrabenfraese',
     # Krane
     'Autokran', 'Telekran (Kette)', 'Telekran (Rad)', 'Miniraupenkran',
     'Obendreher-Kran', 'Untendreher-Kran',
     # Lader
     'Radlader', 'Teleskoplader (starr)', 'Kettendumper', 'Raddumper', 'Laderaupe',
-    # Löffel & Anbaugeräte
-    'Tieflöffel', 'Tieflöffel (hydraulisch schwenkbar)', 'Grabenräumlöffel (starr)',
-    'Grabenräumlöffel (hydraulisch schwenkbar)', 'Sieblöffel', 'Brecherlöffel',
-    'Spatenslöffel', 'Telelöffel',
+    # Loeffel & Anbaugeraete
+    'Tiefloeffel', 'Tiefloeffel (hydraulisch schwenkbar)', 'Grabenraeumloeffel (starr)',
+    'Grabenraeumloeffel (hydraulisch schwenkbar)', 'Siebloeffel', 'Brecherloeffel',
+    'Spatensloeffel', 'Teleloeffel',
     # Greifer & Zangen
     'Abbruch- und Sortiergreifer', 'Abbruchzange/Pulverisierer', 'Pendelgreifer',
     # Sonstige
     'Hydraulikhammer', 'Tiltrotator (Sandwich)', 'Vibrationsplatte', 'Vibrationsstampfer',
-    'Stromerzeuger', 'Kompressor', 'Fugenschneider', 'Kernbohrgerät', 'Hochdruckreiniger',
-    'Gabelstapler', 'Anhängerarbeitsbühne', 'Scherenarbeitsbühne (elektrisch)',
-    'Gelenk-Teleskoparbeitsbühne', 'Siebanlage', 'Backenbrecher', 'Prallbrecher'
+    'Stromerzeuger', 'Kompressor', 'Fugenschneider', 'Kernbohrgeraet', 'Hochdruckreiniger',
+    'Gabelstapler', 'Anhaengerarbeitsbuehne', 'Scherenarbeitsbuehne (elektrisch)',
+    'Gelenk-Teleskoparbeitsbuehne', 'Siebanlage', 'Backenbrecher', 'Prallbrecher'
 ]
 
 KATEGORIE_VALUES = [
-    'bagger', 'lader', 'verdichter', 'fertiger', 'fraese', 'kran',
-    'einbauunterstuetzung', 'transportfahrzeug'
+    'bagger', 'anbaugeraet', 'verdichter', 'beschicker', 'fertiger',
+    'fraese', 'kran', 'lader', 'dumper', 'sonstige'
 ]
 
 VERWENDUNG_VALUES = [
-    'Vermietung', 'Verkauf', 'Fuhrpark', 'Externes Gerät', 'keine'
+    'Vermietung', 'Verkauf', 'Fuhrpark', 'Externes Geraet', 'keine'
 ]
 
-# Boolean fields in eigenschaften_json (query via: eigenschaften_json->>'field' = 'true')
-# Values are TEXT strings: 'true', 'false', 'nicht-vorhanden'
-BOOLEAN_FIELDS = [
-    'allradantrieb', 'allradlenkung', 'knicklenkung', 'dieselmotor', 'motor_diesel',
-    'motor_benzin', 'dieselpartikelfilter', 'elektrostarter', 'kabine', 'klimaanlage',
-    'hochfahrbare_kabine', 'wetterschutzdach', 'hammerhydraulik', 'greiferhydraulik',
-    'scherenhydraulik', 'greiferdreheinrichtung', 'schnellwechsler_mech_',
-    'schnellwechsler_hydr_', 'tiltrotator', 'powertilt', 'zentralschmierung',
-    'bio_hydraulikoel', 'monoausleger', 'verstellausleger', 'seitenknickausleger',
-    'teleskopausleger', 'pratzenabstuetzung', 'schildabstuetzung', 'oszillation',
-    'verdichtungsmesser', 'geteilte_bandage', 'anbauplattenverdichter', 'gas_heizung',
-    'e_heizung', 'temperaturmessung_asphalt', 'truck_assist', 'schwenkband',
-    'splittstreuer', 'absauganlage', 'reversierbar', 'vorruestung_2d_steuerung',
-    'vorruestung_3d_steuerung', 'vorruestung_navitronic', 'vorruestung_voelkel',
-    'vm_38_schnittstelle', 'distanzkontrolle_automatisch', 'asphaltmanager',
-    'funkfernsteuerung', 'abb_arbeitsbereichsbegrenzung', 'gabelaufnahme_beschickerkuebel',
-    'rampen_hydraulisch', 'rampen_mechanisch', 'muldenerhoehung', 'muldenheizung',
-    'schnellgang', 'vor_und_ruecklauf', 'vorlauf'
+KOSTENSTELLE_VALUES = [
+    '100 - Handel',      # 1462 Geraete
+    '200 - Mietpark',    # 854 Geraete
+    '90000 - Fuhrpark',  # 9 Geraete
 ]
 
-# Numeric fields in eigenschaften_json (query via: (eigenschaften_json->>'field')::numeric)
-# Values are TEXT strings: '250.0', 'nicht-vorhanden', etc.
-NUMERIC_FIELDS = [
-    'gewicht_kg', 'motor_leistung_kw', 'laenge_mm', 'grabtiefe_mm', 'loeffelstiel_mm',
-    'anzahl_zaehne', 'arbeitsbreite_mm', 'steigfaehigkeit_mit_vibration__pct',
-    'steigfaehigkeit_ohne_vibration__pct', 'einbaubreite_max__m',
-    'einbaubreite_mit_verbreiterungen_m', 'durchsatzmenge_t_h', 'foerderkapazitaet_t_h',
-    'bandbreite_mm', 'fraesbreite_mm', 'fraestiefe_mm', 'schnittbreite_mm',
-    'ausladung_m', 'ausleger_m', 'hakenhoehe_m', 'tragkraft_max__kg', 'ballast_t',
-    'nutzlast_kg', 'stuetzlast_kg', 'inhalt_m3', 'muldenvolumen_m3', 'arbeitsdruck_bar',
-    'druck_bar', 'zul__reisskraft_knm', 'bodenplatten_mm', 'kantenschneidgeraet_stueck',
-    'fahrgeschwindigkeit_km_h'
+# =============================================================================
+# CODE-NAME FORMAT COLUMNS (critical for ILIKE queries)
+# =============================================================================
+
+CODE_NAME_FORMAT_COLUMNS = {
+    'kostenstelle': ['100 - Handel', '200 - Mietpark', '90000 - Fuhrpark'],
+    'abrechnungsgruppe': ['4.3030.010 - Bohlenverbreiterungen...'],
+    'hersteller': ['VÖG - Vögele', '??? - Sonstige'],  # Partial - most are simple names
+}
+
+# SQL Agent rules for CODE-Name format (imported by sql_agent.py)
+SQL_ILIKE_RULES = """
+SEHR WICHTIG - 'CODE - Name' FORMAT:
+Diese Spalten haben Format 'CODE - Name' (z.B. '200 - Mietpark'):
+- kostenstelle: '100 - Handel', '200 - Mietpark', '90000 - Fuhrpark'
+- abrechnungsgruppe: '4.3030.010 - Beschreibung'
+- hersteller (teilweise): 'VÖG - Vögele'
+
+Bei Suche nach Code/Nummer IMMER ILIKE verwenden:
+- FALSCH: WHERE kostenstelle = '200' (findet NICHTS!)
+- RICHTIG: WHERE kostenstelle ILIKE '200%' (findet '200 - Mietpark')
+- FALSCH: WHERE kostenstelle = '200-' (findet NICHTS!)
+- RICHTIG: WHERE kostenstelle ILIKE '200 -%' (findet '200 - Mietpark')
+"""
+
+# German umlaut handling rules for SQL agent
+SQL_UMLAUT_RULES = """
+DEUTSCHE UMLAUTE:
+Die Datenbank verwendet ASCII-Ersetzungen fuer Umlaute:
+- ae statt ä (z.B. 'Kaltfraese', 'Geraet')
+- oe statt ö (z.B. 'Voegele', 'Loeffel')
+- ue statt ü (z.B. 'Muell', 'Gruenig')
+- ss statt ß (z.B. 'Strasse')
+
+BEISPIELE:
+- Voegele Maschinen: WHERE hersteller ILIKE '%voegele%' (283 Treffer)
+- Fraesen: WHERE geraetegruppe ILIKE '%fraese%' (156 Treffer)
+- Loeffel: WHERE geraetegruppe ILIKE '%loeffel%' (345 Treffer)
+- Geraete: WHERE geraetegruppe ILIKE '%geraet%'
+"""
+
+# Combined rules for SQL agent (both CODE-Name and umlauts)
+SQL_SPECIAL_RULES = SQL_ILIKE_RULES + SQL_UMLAUT_RULES
+
+# Common JSONB property names (from eigenschaften column)
+JSONB_PROPERTIES = [
+    # Boolean properties (value is 'Ja')
+    'Klimaanlage', 'Zentralschmierung', 'Hammerhydraulik', 'Greiferhydraulik',
+    'Oszillation', 'Verdichtungsmesser', 'Allradantrieb', 'Allradlenkung',
+    'Knicklenkung', 'Dieselpartikelfilter', 'Kabine', 'hochfahrbare Kabine',
+    'Gas-Heizung', 'E-Heizung', 'Tiltrotator', 'Powertilt',
+    'Schnellwechsler (mech.)', 'Schnellwechsler (hydr.)', 'Funkfernsteuerung',
+    'ABB - Arbeitsbereichsbegrenzung', 'Monoausleger', 'Verstellausleger',
+
+    # Numeric properties
+    'Gewicht [kg]', 'Breite [mm]', 'Hoehe [mm]', 'Laenge [mm]',
+    'Motor - Leistung [kW]', 'Arbeitsbreite [mm]', 'Grabtiefe [mm]',
+    'Loeffelstiel [mm]', 'Fraesbreite [mm]', 'Fraestiefe [mm]',
+    'Ausladung [m]', 'Ausleger [m]', 'Hakenhoehe [m]', 'Tragkraft max. [kg]',
+    'Fahrgeschwindigkeit [km/h]', 'Nutzlast [kg]', 'Ballast [t]',
+
+    # Text properties
+    'Abgasstufe EU', 'Abgasstufe USA', 'Motor - Hersteller', 'Motor [Typ]',
+    'Getriebe [Art]', 'Getriebe [Typ]', 'Farbe', 'Fuehrerscheinklasse'
 ]
 
-# Backwards compatibility aliases (deprecated - use BOOLEAN_FIELDS/NUMERIC_FIELDS)
-BOOLEAN_COLUMNS = BOOLEAN_FIELDS
-NUMERIC_COLUMNS = NUMERIC_FIELDS
+# Backwards compatibility
+BOOLEAN_FIELDS = ['klimaanlage', 'zentralschmierung']
+NUMERIC_FIELDS = ['gewicht_kg', 'motor_leistung_kw', 'breite_mm', 'hoehe_mm', 'laenge_mm']

@@ -49,7 +49,7 @@ USE_CUSTOM_RAG = os.getenv("USE_CUSTOM_RAG", "true").lower() == "true"
 USE_AGENT_SYSTEM = os.getenv("USE_AGENT_SYSTEM", "true").lower() == "true"
 AGENT_VERBOSE = os.getenv("AGENT_VERBOSE", "false").lower() == "true"
 
-SYSTEM_INSTRUCTIONS = os.getenv("SYSTEM_INSTRUCTIONS", """Du bist der RÜKO AI-Assistent mit Zugriff auf interne Datenbanken und ergänzende Web-Suche.
+SYSTEM_INSTRUCTIONS = os.getenv("SYSTEM_INSTRUCTIONS", """Du bist RÜKO GPT mit Zugriff auf interne Datenbanken und ergänzende Web-Suche.
 
 DATENPRIORITÄT (WICHTIG):
 1. INTERNE DATEN haben IMMER Vorrang:
@@ -425,7 +425,7 @@ async def messages(request: Request):
                         reply_to_id=body.get("id"),
                         recipient=body.get("from"),
                         from_bot=body.get("recipient"),
-                        message="Hallo! Ich bin der RÜKO AI Assistant. Wie kann ich Ihnen helfen?"
+                        message="Hallo! Ich bin RÜKO GPT. Wie kann ich Ihnen helfen?"
                     )
         
         return Response(status_code=200)

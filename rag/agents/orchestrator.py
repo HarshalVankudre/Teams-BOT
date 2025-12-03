@@ -77,10 +77,22 @@ Wenn eine Anfrage mehrere Teile hat (z.B. "Wie viele X und welche Y"):
 KONTEXT-BEWUSSTSEIN:
 {conversation_context}
 
+WICHTIG - FOLLOW-UP ANFRAGEN:
+Wenn der Benutzer Begriffe wie "davon", "diesen", "diese", "daraus", "von denen" verwendet:
+1. Schaue in die vorherige Konversation um zu verstehen WORAUF sich die Anfrage bezieht
+2. ÜBERNEHME die Filter aus der vorherigen Anfrage!
+
+Beispiel:
+- Vorher: "Wie viele Mietmaschinen?" → Ergebnis: 794 (WHERE verwendung='Vermietung')
+- Jetzt: "Wie viele davon sind von Bomag?"
+- RICHTIG: WHERE verwendung='Vermietung' AND hersteller='Bomag' (kombiniert beide Filter!)
+- FALSCH: WHERE hersteller='Bomag' (ignoriert den Kontext)
+
 REGELN:
 - Rufe IMMER mindestens einen Agenten auf
 - Bevorzuge interne Daten (SQL/Pinecone) vor Web-Suche
 - Bei Multi-Teil-Anfragen: MEHRERE separate Agenten-Aufrufe
+- Bei Follow-up Anfragen: KOMBINIERE Filter aus vorheriger Anfrage!
 - Wenn unklar: Frage nach (request_clarification)"""
 
     def __init__(
@@ -127,9 +139,10 @@ REGELN:
             return "Keine vorherige Konversation."
 
         history_lines = []
-        for entry in context.conversation_history[-5:]:  # Last 5 exchanges
+        # Use last 10 messages (5 exchanges) for better context
+        for entry in context.conversation_history[-10:]:
             role = entry.get("role", "unknown")
-            content = entry.get("content", "")[:200]  # Truncate long messages
+            content = entry.get("content", "")[:500]  # Allow longer content for better understanding
             history_lines.append(f"- {role}: {content}")
 
         return "Letzte Nachrichten:\n" + "\n".join(history_lines)

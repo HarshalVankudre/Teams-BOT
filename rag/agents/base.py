@@ -141,7 +141,12 @@ class BaseAgent(ABC):
     def log(self, message: str) -> None:
         """Log message if verbose mode is enabled"""
         if self.verbose:
-            print(f"[{self.agent_id.upper()}] {message}")
+            try:
+                print(f"[{self.agent_id.upper()}] {message}")
+            except UnicodeEncodeError:
+                # Handle Windows encoding issues with German characters
+                safe_msg = message.encode('ascii', errors='replace').decode('ascii')
+                print(f"[{self.agent_id.upper()}] {safe_msg}")
 
     async def execute(self, context: AgentContext) -> AgentResponse:
         """

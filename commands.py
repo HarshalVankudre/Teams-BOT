@@ -162,10 +162,176 @@ Nach einem Reset beginnt der Bot ohne Vorwissen über frühere Fragen."""
     await send_reply_func(body, message)
 
 
+async def handle_maschinen_command(body: dict, args: list, send_reply_func):
+    """Handle /maschinen command - Search equipment"""
+    if not args:
+        message = """
+🔧 **Maschinensuche**
+
+**Verwendung:** `/maschinen <Suchbegriff>`
+
+**Beispiele:**
+• `/maschinen Kettenbagger`
+• `/maschinen Liebherr`
+• `/maschinen Walze mit Klimaanlage`
+• `/maschinen über 20 Tonnen`
+
+💡 Oder frag einfach direkt: "Zeige alle Caterpillar Bagger"
+"""
+        await send_reply_func(body, message)
+        return
+
+    # Pass query to be processed as natural language
+    query = f"Suche Maschinen: {' '.join(args)}"
+    await send_reply_func(body, f"🔍 Suche nach: **{' '.join(args)}**\n\n_Bitte stelle die Anfrage direkt ohne Befehl für beste Ergebnisse._")
+
+
+async def handle_vergleich_command(body: dict, args: list, send_reply_func):
+    """Handle /vergleich command - Compare equipment"""
+    if not args:
+        message = """
+⚖️ **Maschinenvergleich**
+
+**Verwendung:** `/vergleich <Maschine 1> vs <Maschine 2>`
+
+**Beispiele:**
+• `/vergleich Kettenbagger vs Mobilbagger`
+• `/vergleich CAT 320 vs Liebherr R 932`
+• `/vergleich Tandemwalze vs Walzenzug`
+
+💡 Oder frag direkt: "Vergleiche CAT 320 mit Liebherr R 932"
+"""
+        await send_reply_func(body, message)
+        return
+
+    await send_reply_func(body, f"⚖️ Vergleich: **{' '.join(args)}**\n\n_Bitte stelle die Anfrage direkt ohne Befehl für beste Ergebnisse._")
+
+
+async def handle_empfehlung_command(body: dict, args: list, send_reply_func):
+    """Handle /empfehlung command - Get recommendations"""
+    if not args:
+        message = """
+💡 **Maschinenempfehlung**
+
+**Verwendung:** `/empfehlung <Einsatzzweck>`
+
+**Beispiele:**
+• `/empfehlung enge Baustelle`
+• `/empfehlung Straßenbau 6m breit`
+• `/empfehlung schwerer Aushub`
+• `/empfehlung Verdichtung Asphalt`
+
+💡 Oder frag direkt: "Welche Maschine für enge Baustellen?"
+"""
+        await send_reply_func(body, message)
+        return
+
+    await send_reply_func(body, f"💡 Empfehlung für: **{' '.join(args)}**\n\n_Bitte stelle die Anfrage direkt ohne Befehl für beste Ergebnisse._")
+
+
+async def handle_verfügbar_command(body: dict, args: list, send_reply_func):
+    """Handle /verfügbar command - Check availability"""
+    if not args:
+        message = """
+✅ **Verfügbarkeit prüfen**
+
+**Verwendung:** `/verfügbar <Maschinentyp oder Filter>`
+
+**Beispiele:**
+• `/verfügbar Mietmaschinen`
+• `/verfügbar Verkauf Bagger`
+• `/verfügbar Kettenbagger zur Miete`
+
+💡 Oder frag direkt: "Welche Bagger sind zur Miete verfügbar?"
+"""
+        await send_reply_func(body, message)
+        return
+
+    await send_reply_func(body, f"✅ Verfügbarkeit: **{' '.join(args)}**\n\n_Bitte stelle die Anfrage direkt ohne Befehl für beste Ergebnisse._")
+
+
+async def handle_daten_command(body: dict, args: list, send_reply_func):
+    """Handle /daten command - Get technical specifications"""
+    if not args:
+        message = """
+📊 **Technische Daten**
+
+**Verwendung:** `/daten <Maschinenname oder Seriennummer>`
+
+**Beispiele:**
+• `/daten CAT 320`
+• `/daten Liebherr R 932`
+• `/daten INV-2024-001`
+
+💡 Oder frag direkt: "Zeige alle technischen Daten von CAT 320"
+"""
+        await send_reply_func(body, message)
+        return
+
+    await send_reply_func(body, f"📊 Technische Daten: **{' '.join(args)}**\n\n_Bitte stelle die Anfrage direkt ohne Befehl für beste Ergebnisse._")
+
+
+async def handle_statistik_command(body: dict, args: list, send_reply_func):
+    """Handle /statistik command - Fleet statistics"""
+    message = """
+📈 **Bestandsstatistik**
+
+**Frag mich direkt:**
+• "Wie viele Maschinen haben wir?"
+• "Anzahl Bagger nach Hersteller"
+• "Bestandsübersicht nach Kategorie"
+• "Top 10 Hersteller im Bestand"
+• "Durchschnittsgewicht aller Walzen"
+
+💡 Stelle deine Statistik-Frage einfach direkt!
+"""
+    await send_reply_func(body, message)
+
+
+async def handle_dokumente_command(body: dict, args: list, send_reply_func):
+    """Handle /dokumente command - Search company documents"""
+    if not args:
+        message = """
+📁 **Dokumentensuche**
+
+**Verwendung:** `/dokumente <Suchbegriff>`
+
+**Beispiele:**
+• `/dokumente Wartung`
+• `/dokumente Sicherheitsrichtlinien`
+• `/dokumente Urlaubsantrag`
+
+💡 Oder frag direkt: "Was sind die Wartungsintervalle für Bagger?"
+"""
+        await send_reply_func(body, message)
+        return
+
+    await send_reply_func(body, f"📁 Dokumentensuche: **{' '.join(args)}**\n\n_Bitte stelle die Anfrage direkt ohne Befehl für beste Ergebnisse._")
+
+
+async def handle_übersicht_command(body: dict, args: list, send_reply_func):
+    """Handle /übersicht (overview) command - Quick overview of all commands"""
+    overview_text = """
+📋 **RÜKO GPT - Befehlsübersicht**
+
+• `/übersicht` - Diese Übersicht anzeigen
+• `/feedback <text>` - Feedback zur letzten Antwort geben
+
+💡 **Tipp:** Stelle Fragen einfach direkt - ohne Befehle!
+
+**Beispiele:**
+• "Wie viele Bagger haben wir?"
+• "Zeige alle Liebherr Maschinen"
+• "Welche Maschine für enge Baustellen?"
+• "Vergleiche CAT 320 mit Liebherr R 932"
+"""
+    await send_reply_func(body, overview_text)
+
+
 async def handle_hilfe_command(body: dict, args: list, send_reply_func):
     """Handle /hilfe (help) command"""
     help_text = """
-📖 **RÜKO AI Assistant - Hilfe**
+📖 **RÜKO GPT - Hilfe**
 
 **📁 Dokumentenverwaltung:**
 
@@ -209,7 +375,7 @@ async def handle_hilfe_command(body: dict, args: list, send_reply_func):
 • Unterstützte Formate: PDF, DOCX, XLSX, JSON, CSV, TXT
 
 **🤖 Über mich:**
-Ich bin ein KI-Assistent für RÜKO-Dokumente.
+Ich bin RÜKO GPT, der KI-Assistent für RÜKO-Dokumente.
 Ich nutze OpenAI GPT-4o und durchsuche die Wissensdatenbank,
 um präzise Antworten auf deine Fragen zu geben.
 
@@ -306,25 +472,14 @@ async def handle_feedback_command(body: dict, args: list, send_reply_func):
 
 # Command routing map
 COMMAND_HANDLERS = {
-    "/hochladen": handle_hochladen_command,
-    "/liste": handle_liste_command,
-    "/löschen": handle_löschen_command,
-    "/suchen": handle_suchen_command,
-    "/zurücksetzen": handle_zurücksetzen_command,
-    "/hilfe": handle_hilfe_command,
-    "/status": handle_status_command,
+    "/übersicht": handle_übersicht_command,
     "/feedback": handle_feedback_command,
     "/rückmeldung": handle_feedback_command,
 }
 
 # English aliases (for compatibility)
 COMMAND_ALIASES = {
-    "/upload": "/hochladen",
-    "/list": "/liste",
-    "/delete": "/löschen",
-    "/search": "/suchen",
-    "/reset": "/zurücksetzen",
-    "/help": "/hilfe",
+    "/overview": "/übersicht",
 }
 
 

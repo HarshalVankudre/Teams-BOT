@@ -151,7 +151,12 @@ class AgentSystem:
     def _log(self, message: str):
         """Log message if verbose"""
         if self.config.verbose:
-            print(f"[AGENT_SYSTEM] {message}")
+            try:
+                print(f"[AGENT_SYSTEM] {message}")
+            except UnicodeEncodeError:
+                # Handle Windows encoding issues with German characters
+                safe_msg = message.encode('ascii', errors='replace').decode('ascii')
+                print(f"[AGENT_SYSTEM] {safe_msg}")
 
     def get_agent(self, agent_id: str) -> Optional[BaseAgent]:
         """Get an agent instance by ID"""
@@ -560,7 +565,7 @@ class AgentSystem:
 
             # Add new turn
             history.append({"role": "user", "content": user_message})
-            history.append({"role": "assistant", "content": ai_response[:1000]})  # Truncate long responses
+            history.append({"role": "assistant", "content": ai_response[:2000]})  # Store more context for follow-ups
 
             # Keep last 10 turns (20 messages)
             if len(history) > 20:

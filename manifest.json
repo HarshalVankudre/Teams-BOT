@@ -1,11 +1,11 @@
 {
     "$schema": "https://developer.microsoft.com/json-schemas/teams/v1.16/MicrosoftTeams.schema.json",
     "manifestVersion": "1.16",
-    "version": "1.0.0",
-    "id": "c1508d9b-718c-4e1d-82c3-05b327071d26",
+    "version": "2.0.0",
+    "id": "2c64eecf-8483-4c94-ad79-f5b1462f9bb7",
     "packageName": "com.rueko.teamsbot",
     "developer": {
-        "name": "RUEKO GmbH",
+        "name": "RÜKO GmbH",
         "websiteUrl": "https://www.rueko.de",
         "privacyUrl": "https://www.rueko.de/privacy",
         "termsOfUseUrl": "https://www.rueko.de/terms"
@@ -15,12 +15,12 @@
         "outline": "outline.png"
     },
     "name": {
-        "short": "RUEKO AI Assistant",
-        "full": "RUEKO AI Assistant - Powered by OpenAI"
+        "short": "RÜKO GPT",
+        "full": "RÜKO GPT - Powered by OpenAI"
     },
     "description": {
-        "short": "AI Assistant for RUEKO employees",
-        "full": "An intelligent AI assistant powered by OpenAI that helps RUEKO employees with various tasks. Each employee has their own private conversation thread."
+        "short": "AI Assistant for RÜKO employees",
+        "full": "An intelligent AI assistant powered by OpenAI that helps RÜKO employees with various tasks. Each employee has their own private conversation thread."
     },
     "accentColor": "#FFFFFF",
     "bots": [
@@ -34,7 +34,22 @@
             "supportsFiles": false,
             "isNotificationOnly": false,
             "supportsCalling": false,
-            "supportsVideo": false
+            "supportsVideo": false,
+            "commandLists": [
+                {
+                    "scopes": ["personal", "team", "groupchat"],
+                    "commands": [
+                        {
+                            "title": "übersicht",
+                            "description": "Befehlsübersicht"
+                        },
+                        {
+                            "title": "feedback",
+                            "description": "Feedback geben"
+                        }
+                    ]
+                }
+            ]
         }
     ],
     "permissions": [

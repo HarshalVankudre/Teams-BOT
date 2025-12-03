@@ -41,7 +41,7 @@ from .interface import (
 )
 from ...config import config
 from ...postgres import PostgresService, postgres_service
-from ...schema import SQL_AGENT_SCHEMA
+from ...schema import SQL_AGENT_SCHEMA, SQL_SPECIAL_RULES
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -207,6 +207,8 @@ REGELN:
 7. Bei AVG/SUM: Filtere 'nicht-vorhanden' und leere Werte aus
 8. VERWENDE geraetegruppe ILIKE '%bagger%' für Gerätetypen, NICHT kategorie!
 9. FÜGE KEINE Filter für 'verwendung' hinzu, außer explizit angefragt!
+
+{SQL_SPECIAL_RULES}
 
 KRITISCH:
 - Für Gerätetypen (Bagger, Walzen, etc.): IMMER geraetegruppe verwenden!
