@@ -1,4 +1,4 @@
-# Teams-BOT
+# RUEKO Teams Bot
 
 [![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
@@ -7,9 +7,8 @@
 [![Google Cloud](https://img.shields.io/badge/Google_Cloud_Run-4285F4?style=for-the-badge&logo=google-cloud&logoColor=white)](https://cloud.google.com/run)
 [![Redis](https://img.shields.io/badge/Redis-DC382D?style=for-the-badge&logo=redis&logoColor=white)](https://redis.io)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?style=for-the-badge&logo=postgresql&logoColor=white)](https://postgresql.org)
-[![License](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)](LICENSE)
 
-A production-grade FastAPI backend that connects Microsoft Teams to OpenAI using a sophisticated **Multi-Agent Architecture**. The bot receives messages from Teams via Bot Framework, processes them through specialized AI agents, and returns intelligent responses with full multi-turn conversation support.
+A production-grade FastAPI backend that connects Microsoft Teams to OpenAI using a sophisticated **Multi-Agent Architecture**. The RUEKO AI Assistant processes messages from Teams through specialized AI agents and returns intelligent responses with full multi-turn conversation support for construction equipment management.
 
 ---
 
@@ -18,8 +17,10 @@ A production-grade FastAPI backend that connects Microsoft Teams to OpenAI using
 - [Features](#features)
 - [Architecture](#architecture)
 - [Tech Stack](#tech-stack)
+- [Prerequisites](#prerequisites)
 - [Installation](#installation)
 - [Configuration](#configuration)
+- [Bot Commands](#bot-commands)
 - [Usage](#usage)
 - [API Reference](#api-reference)
 - [Deployment](#deployment)
@@ -33,23 +34,25 @@ A production-grade FastAPI backend that connects Microsoft Teams to OpenAI using
 
 ### Multi-Agent Intelligence
 
-| Agent | Description |
-|-------|-------------|
-| **Orchestrator Agent** | Analyzes queries using GPT-5 reasoning and routes to appropriate sub-agents |
-| **SQL Agent** | Generates and executes SQL queries against PostgreSQL equipment database |
-| **Pinecone Agent** | Semantic search for recommendations and scenario-based queries |
-| **Web Search Agent** | External information retrieval via Tavily API |
-| **Reviewer Agent** | Synthesizes results from all agents into coherent responses |
+| Agent | Model | Description |
+|-------|-------|-------------|
+| **Orchestrator Agent** | GPT-5 (Reasoning) | Analyzes queries using advanced reasoning and routes to appropriate sub-agents |
+| **SQL Agent** | GPT-5 (Non-reasoning) | Generates and executes SQL queries against PostgreSQL equipment database |
+| **Pinecone Agent** | GPT-5 (Non-reasoning) | Semantic search for recommendations and scenario-based queries |
+| **Web Search Agent** | Tavily API | External information retrieval for supplementary data |
+| **Reviewer Agent** | GPT-5 (Reasoning) | Synthesizes results from all agents into coherent, formatted responses |
 
+**Key Capabilities:**
 - Modular agent system with self-registration via decorators
 - Parallel execution of independent agents for optimal performance
 - Dynamic agent discovery from registry
+- Smart query routing based on intent analysis
 
 ### Equipment Database
 
 - PostgreSQL database with **2,395+ construction equipment records** (Baumaschinen)
 - Tracks manufacturers: Caterpillar, Liebherr, Bomag, Vogele, Hamm, Wirtgen, Kubota, Volvo, Hitachi, Komatsu
-- Equipment types: excavators, rollers, pavers, milling machines
+- Equipment types: excavators (Bagger), rollers (Walzen), pavers (Fertiger), milling machines (Fraesen)
 - Detailed specifications stored in JSONB: weight, power, dimensions, features, availability status
 
 ### Enterprise Features
@@ -57,17 +60,17 @@ A production-grade FastAPI backend that connects Microsoft Teams to OpenAI using
 | Feature | Description |
 |---------|-------------|
 | **OpenAI Responses API** | Latest synchronous API with streaming - no polling required |
-| **Multi-Turn Conversations** | Full context via `previous_response_id` for natural dialogue |
-| **Redis Persistence** | Conversation storage with configurable TTL expiration |
+| **Multi-Turn Conversations** | Full context preservation via `previous_response_id` for natural dialogue |
+| **Redis Persistence** | Conversation storage with configurable TTL expiration (default: 24 hours) |
 | **Per-User Isolation** | Individual conversation threads even in group chats |
-| **Typing Indicators** | Continuous feedback during AI processing |
-| **Feedback Tracking** | Analytics and conversation logging |
+| **Typing Indicators** | Continuous visual feedback during AI processing (every 2.5 seconds) |
+| **Feedback Tracking** | Analytics and conversation logging for improvement |
 | **Graceful Fallback** | In-memory storage when Redis is unavailable |
 
 ### Cloud-Native Design
 
-- Docker containerization
-- Google Cloud Run deployment
+- Docker containerization with optimized layer caching
+- Google Cloud Run deployment ready
 - Azure Bot Framework integration
 - Connection pooling and token caching
 - HTTP client pooling for high performance
@@ -125,11 +128,24 @@ A production-grade FastAPI backend that connects Microsoft Teams to OpenAI using
 
 1. Teams sends POST to `/api/messages` via Bot Framework
 2. Bot extracts user message and removes @mentions
-3. Orchestrator Agent analyzes query intent using GPT-5
-4. Orchestrator plans which sub-agents to invoke
-5. Sub-agents execute in parallel (SQL, Pinecone, Web Search)
-6. Reviewer Agent synthesizes all results into coherent response
-7. Response sent back to Teams with conversation context preserved
+3. Commands (starting with `/`) are routed to command handler
+4. Regular messages: Orchestrator Agent analyzes query intent using GPT-5
+5. Orchestrator plans which sub-agents to invoke
+6. Sub-agents execute in parallel (SQL, Pinecone, Web Search)
+7. Reviewer Agent synthesizes all results into coherent response
+8. Response sent back to Teams with conversation context preserved
+
+### Query Routing Logic
+
+| Query Type | Example | Agent Used |
+|------------|---------|------------|
+| Counting | "Wie viele Bagger haben wir?" | SQL Agent |
+| Filtering | "Geraete mit Klimaanlage" | SQL Agent |
+| Comparison | "Kettenbagger vs Mobilbagger" | SQL Agent |
+| Lookup | "Zeige CAT 320" | SQL Agent |
+| Recommendations | "Beste Maschine fuer 9m Strasse" | Pinecone Agent |
+| Scenarios | "Was fuer enge Baustellen?" | Pinecone Agent |
+| External Info | "Aktuelle Preise" | Web Search Agent |
 
 ---
 
@@ -137,30 +153,35 @@ A production-grade FastAPI backend that connects Microsoft Teams to OpenAI using
 
 | Category | Technology |
 |----------|------------|
-| **Backend Framework** | FastAPI + Uvicorn |
+| **Backend Framework** | FastAPI 0.115 + Uvicorn |
 | **AI Models** | OpenAI GPT-5 / GPT-4o (Responses API) |
-| **Database** | PostgreSQL (psycopg2) |
+| **Database** | PostgreSQL (psycopg2-binary) |
 | **Vector Database** | Pinecone |
 | **Session Storage** | Redis |
 | **Web Search** | Tavily API |
 | **Bot Framework** | Microsoft Bot Framework |
-| **Document Processing** | PyMuPDF, python-docx, openpyxl |
+| **Document Processing** | PyMuPDF, python-docx, openpyxl, pandas |
 | **Containerization** | Docker |
 | **Cloud Platform** | Google Cloud Run |
 | **Authentication** | Azure AD (Single-tenant) |
 
 ---
 
+## Prerequisites
+
+Before you begin, ensure you have the following:
+
+- **Python 3.11+** installed
+- **PostgreSQL database** with equipment data schema
+- **Pinecone account** and configured index
+- **Redis instance** (optional, falls back to in-memory storage)
+- **Azure Bot Service** registration with App ID and Password
+- **OpenAI API key** with access to GPT-5 or GPT-4o models
+- **Tavily API key** (optional, for web search functionality)
+
+---
+
 ## Installation
-
-### Prerequisites
-
-- Python 3.11+
-- PostgreSQL database with equipment data
-- Pinecone account and index
-- Redis instance (optional, falls back to in-memory)
-- Azure Bot Service registration
-- OpenAI API key
 
 ### Local Setup
 
@@ -175,7 +196,12 @@ cd Teams-BOT
 
 ```bash
 python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+
+# On Linux/macOS:
+source venv/bin/activate
+
+# On Windows:
+venv\Scripts\activate
 ```
 
 3. **Install dependencies**
@@ -184,11 +210,29 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-4. **Configure environment variables**
+4. **Create environment configuration**
 
-Create a `.env` file in the project root (see [Configuration](#configuration) section).
+```bash
+cp .env.example .env
+```
 
-5. **Run the application**
+Edit the `.env` file with your credentials (see [Configuration](#configuration) section).
+
+5. **Set up directory structure** (for document processing)
+
+```
+teams-bot/
+├── documents/
+│   ├── original/        # Place source files here
+│   ├── enriched/        # Processed PDFs
+│   └── processed/       # Converted formats
+└── logs/
+    ├── pdf_enrichment.log
+    ├── document_upload.log
+    └── file_processing.log
+```
+
+6. **Run the application**
 
 ```bash
 python app.py
@@ -202,14 +246,14 @@ The server starts on `http://localhost:8001`
 
 ### Environment Variables
 
-Create a `.env` file with the following variables:
+Create a `.env` file in the project root with the following variables:
 
 #### Required - OpenAI
 
 ```env
 OPENAI_API_KEY=sk-your-openai-api-key
-OPENAI_MODEL=gpt-5
-REASONING_EFFORT=medium
+OPENAI_MODEL=gpt-5-nano                    # gpt-5, gpt-5-mini, gpt-5-nano, gpt-4o
+REASONING_EFFORT=medium                     # minimal, low, medium, high
 ```
 
 #### Required - Azure Bot Service
@@ -220,35 +264,38 @@ BOT_APP_PASSWORD=your-bot-app-password
 AZURE_TENANT_ID=your-azure-tenant-id
 ```
 
-#### Required - Database
+#### Required - PostgreSQL Database
 
 ```env
 POSTGRES_HOST=your-postgres-host
 POSTGRES_PORT=5432
-POSTGRES_DB=your-database-name
-POSTGRES_USER=your-username
+POSTGRES_DB=sema
+POSTGRES_USER=postgres
 POSTGRES_PASSWORD=your-password
 ```
 
-#### Required - Pinecone
+#### Required - Pinecone Vector Database
 
 ```env
 PINECONE_API_KEY=your-pinecone-api-key
-PINECONE_HOST=your-pinecone-host
-PINECONE_NAMESPACE=your-namespace
+PINECONE_HOST=https://your-index.pinecone.io
+PINECONE_NAMESPACE=rueko-documents
+PINECONE_MACHINERY_NAMESPACE=machinery-data
 ```
 
-#### Optional - Redis
+#### Optional - Redis (Conversation Persistence)
 
 ```env
 REDIS_URL=redis://localhost:6379
 CONVERSATION_TTL_HOURS=24
 ```
 
-#### Optional - Web Search
+#### Optional - Web Search (Tavily)
 
 ```env
-TAVILY_API_KEY=your-tavily-api-key
+TAVILY_API_KEY=tvly-your-api-key
+ENABLE_WEB_SEARCH=true
+WEB_SEARCH_MAX_RESULTS=3
 ```
 
 #### Optional - Agent System
@@ -256,9 +303,53 @@ TAVILY_API_KEY=your-tavily-api-key
 ```env
 USE_CUSTOM_RAG=true
 USE_AGENT_SYSTEM=true
-AGENT_VERBOSE=false
 AGENT_PARALLEL_EXECUTION=true
+AGENT_VERBOSE=false
 ```
+
+#### Advanced Configuration
+
+```env
+CHUNKING_MODEL=gpt-5-nano
+CHUNKING_REASONING=minimal
+EMBEDDING_MODEL=text-embedding-3-large
+SEARCH_TOP_K=5
+RERANK_TOP_N=3
+VECTOR_STORE_ID=vs_...
+```
+
+---
+
+## Bot Commands
+
+The RUEKO Teams Bot supports both German and English commands:
+
+### Document Management
+
+| Command | Alias | Description |
+|---------|-------|-------------|
+| `/liste` | `/list` | Display all documents in the knowledge database with filename, size, upload date |
+| `/suchen <term>` | `/search <term>` | Search documents by filename (e.g., `/suchen urlaub`) |
+| `/hochladen` | `/upload` | Information about document uploading (admin feature) |
+| `/loeschen` | `/delete` | Information about document deletion (admin feature) |
+
+### Conversation Management
+
+| Command | Alias | Description |
+|---------|-------|-------------|
+| `/zuruecksetzen` | `/reset` | Clear conversation history and start fresh |
+| `/feedback <text>` | `/rueckmeldung <text>` | Submit feedback about the bot's response |
+
+### Information
+
+| Command | Alias | Description |
+|---------|-------|-------------|
+| `/hilfe` | `/help` | Display comprehensive help with all commands and capabilities |
+| `/status` | - | Show system information: AI model, document count, feature status |
+
+### Supported File Formats
+
+The bot can process: PDF, DOCX, XLSX, JSON, CSV, TXT
 
 ---
 
@@ -276,8 +367,9 @@ uvicorn app:app --host 0.0.0.0 --port 8000
 
 ### CLI Testing
 
+Test the bot without Teams integration:
+
 ```bash
-# Interactive testing without Teams
 python cli_test.py
 ```
 
@@ -308,6 +400,7 @@ For local development, use [ngrok](https://ngrok.com) to expose your local serve
 ```bash
 ngrok http 8000
 # Use the ngrok URL as your messaging endpoint in Azure Bot Service
+# Example: https://your-subdomain.ngrok-free.dev/api/messages
 ```
 
 ---
@@ -318,7 +411,7 @@ ngrok http 8000
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `GET` | `/` | Health check - returns status |
+| `GET` | `/` | Basic health check - returns status confirmation |
 | `GET` | `/health` | Detailed health with model info, Redis status, and active conversation count |
 | `POST` | `/api/messages` | Bot Framework webhook for Teams messages |
 | `POST` | `/api/reset-conversation` | Reset conversation history |
@@ -328,7 +421,7 @@ ngrok http 8000
 ```json
 {
   "status": "healthy",
-  "model": "gpt-5",
+  "model": "gpt-5-nano",
   "redis": "connected",
   "active_conversations": 42
 }
@@ -342,7 +435,7 @@ ngrok http 8000
 }
 ```
 
-Or empty body `{}` to reset all conversations.
+Or send an empty body `{}` to reset all conversations.
 
 ---
 
@@ -363,7 +456,7 @@ gcloud run deploy teams-bot \
 
 ```bash
 gcloud run services update teams-bot \
-  --set-env-vars="OPENAI_API_KEY=sk-xxx,OPENAI_MODEL=gpt-5,REASONING_EFFORT=medium"
+  --set-env-vars="OPENAI_API_KEY=sk-xxx,OPENAI_MODEL=gpt-5-nano,REASONING_EFFORT=medium"
 ```
 
 ### Docker
@@ -379,6 +472,8 @@ docker build -t teams-bot .
 ```bash
 docker run -p 8080:8080 --env-file .env teams-bot
 ```
+
+The container exposes port 8080 and uses `uvicorn` to run the application.
 
 ### Azure App Service
 
@@ -405,44 +500,49 @@ az webapp deployment source config-zip \
 ## Project Structure
 
 ```
-teams-bot/
+Teams-BOT/
 |-- app.py                    # Main FastAPI application
-|-- commands.py               # Bot command handlers
-|-- cli_test.py               # CLI testing tool
+|-- commands.py               # Bot command handlers (/hilfe, /status, etc.)
+|-- cli_test.py               # CLI testing tool for local development
 |-- requirements.txt          # Python dependencies
-|-- Dockerfile                # Container configuration
-|-- .env                      # Environment variables (not committed)
+|-- Dockerfile                # Container configuration (Python 3.11-slim)
+|-- manifest.json             # Teams app manifest
+|-- .env.example              # Environment variables template
+|-- startup.sh                # Container startup script
+|-- color.png                 # Teams app color icon
+|-- outline.png               # Teams app outline icon
 |
 |-- rag/                      # RAG and Agent System
-|   |-- __init__.py
+|   |-- __init__.py           # Package initialization
 |   |-- config.py             # Configuration management
 |   |-- search.py             # RAG search coordinator
-|   |-- embeddings.py         # OpenAI embeddings
+|   |-- embeddings.py         # OpenAI embeddings service
 |   |-- vector_store.py       # Pinecone integration
-|   |-- postgres.py           # PostgreSQL queries
+|   |-- postgres.py           # PostgreSQL equipment queries
 |   |-- chunker.py            # Document chunking
 |   |-- processor.py          # Document processing
-|   |-- feedback.py           # Feedback tracking
+|   |-- schema.py             # Data schema definitions
+|   |-- feedback.py           # Feedback tracking system
 |   |
 |   |-- agents/               # Multi-Agent System
-|       |-- __init__.py
+|       |-- __init__.py       # Agent exports
 |       |-- base.py           # Base agent class and context
 |       |-- registry.py       # Agent registry with decorators
 |       |-- agent_system.py   # Main coordinator
 |       |-- orchestrator.py   # Query analysis and routing (GPT-5)
-|       |-- sql_agent.py      # SQL generation and execution
-|       |-- pinecone_agent.py # Semantic vector search
-|       |-- web_search_agent.py  # Tavily integration
 |       |-- reviewer_agent.py # Response synthesis
+|       |-- subagents/        # Specialized sub-agents
 |
 |-- scripts/                  # Utility scripts
 |   |-- index_documents.py    # Document indexing to Pinecone
 |   |-- index_machinery.py    # Equipment data indexing
 |
 |-- tests/                    # Test files
-    |-- simple_test.py
-    |-- debug_queries.py
-    |-- test_agent.py
+|   |-- simple_test.py
+|   |-- debug_queries.py
+|   |-- test_agent.py
+|
+|-- docs/                     # Additional documentation
 ```
 
 ---
@@ -460,15 +560,15 @@ Contributions are welcome! Please follow these steps:
 ### Code Style
 
 - Follow PEP 8 guidelines
-- Use type hints
-- Write docstrings for public functions
+- Use type hints for function parameters and return values
+- Write docstrings for public functions and classes
 - Add tests for new features
 
 ---
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is proprietary software developed for RUEKO GmbH.
 
 ---
 
@@ -479,9 +579,11 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - [Pinecone](https://pinecone.io) for vector database services
 - [Microsoft Bot Framework](https://dev.botframework.com) for Teams integration
 - [Google Cloud](https://cloud.google.com) for Cloud Run hosting
+- [Tavily](https://tavily.com) for web search API
 
 ---
 
 <p align="center">
-  Built with dedication for RUKO construction equipment management
+  <strong>RUEKO AI Assistant</strong> - Powered by OpenAI<br>
+  Built for RUEKO GmbH construction equipment management
 </p>
