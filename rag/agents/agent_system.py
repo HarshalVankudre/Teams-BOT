@@ -47,6 +47,7 @@ class AgentSystemResult:
     sources: List[Dict[str, Any]] = field(default_factory=list)
     query_intent: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
+    file_export: Optional[Dict[str, Any]] = None  # For Excel/PDF exports
 
 
 class AgentSystem:
@@ -301,6 +302,7 @@ class AgentSystem:
                 )
 
             response_text = reviewer_result.data.get("response", "Keine Antwort verfügbar.")
+            file_export = reviewer_result.data.get("file_export")  # Get file export if present
 
             # 7. Store updated context in Redis
             if self.redis_client and thread_key:
@@ -321,7 +323,8 @@ class AgentSystem:
                     "sql_results_count": len(context.sql_results) if context.sql_results else 0,
                     "pinecone_results_count": len(context.pinecone_results) if context.pinecone_results else 0,
                     "web_results_count": len(context.web_results) if context.web_results else 0
-                }
+                },
+                file_export=file_export  # Pass through file export data
             )
 
         except Exception as e:
@@ -511,12 +514,13 @@ class AgentSystem:
 
         elif agent_id == "pinecone":
             # Pinecone agent gets specific search query - REQUIRED, no fallback
-            instruction = args.get("search_query")
+            # Support both old (search_query) and new (pinecone_query) parameter names
+            instruction = args.get("pinecone_query") or args.get("search_query")
             if instruction:
                 context.metadata["pinecone_query"] = instruction
                 self._log(f"  → Pinecone instruction: {instruction[:80]}...")
-            context.metadata["pinecone_namespace"] = args.get("namespace", "both")
-            context.metadata["pinecone_top_k"] = args.get("top_k", 5)
+            context.metadata["pinecone_namespace"] = args.get("pinecone_namespace") or args.get("namespace", "both")
+            context.metadata["pinecone_top_k"] = args.get("pinecone_top_k") or args.get("top_k", 5)
 
         elif agent_id == "web_search":
             # Web search agent gets specific search query - REQUIRED, no fallback
@@ -563,9 +567,9 @@ class AgentSystem:
             history_data = await self.redis_client.get(history_key)
             history = json.loads(history_data) if history_data else []
 
-            # Add new turn
+            # Add new turn - store more context for better follow-up understanding
             history.append({"role": "user", "content": user_message})
-            history.append({"role": "assistant", "content": ai_response[:2000]})  # Store more context for follow-ups
+            history.append({"role": "assistant", "content": ai_response[:4000]})  # Store full response for context
 
             # Keep last 10 turns (20 messages)
             if len(history) > 20:
