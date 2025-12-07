@@ -148,11 +148,37 @@ See `.env.example` for all configuration options.
 
 ### PostgreSQL - Equipment Database (geraete)
 
-Main columns:
-- `kategorie`: bagger, lader, verdichter, fertiger, fraese, kran
-- `geraetegruppe`: Kettenbagger, Mobilbagger, Tandemwalze, etc.
-- `hersteller`: Caterpillar, Liebherr, Bomag, etc.
-- `eigenschaften_json`: JSONB with 170+ technical properties
+**Schema updated 2024-12-07**: All properties extracted to direct columns for faster queries.
+
+**Identification & Classification:**
+- `id`: BIGINT PRIMARY KEY (SEMA primaryKey)
+- `bezeichnung`: Model name (e.g., "CAT 320", "BW 174 AP-5 AM")
+- `hersteller`: Manufacturer (Caterpillar, Liebherr, Bomag, etc.)
+- `geraetegruppe`: Equipment type - MOST IMPORTANT! (Kettenbagger, Mobilbagger, Tandemwalze, etc.)
+- `kategorie`: Category (bagger, lader, verdichter, fertiger, fraese, kran)
+- `verwendung`: Usage (Vermietung, Verkauf, Fuhrpark)
+- `seriennummer`, `inventarnummer`
+
+**Property Columns (prop_*) - 171 columns for all technical specs:**
+- `prop_breite`, `prop_hoehe`, `prop_laenge`, `prop_gewicht` - Dimensions with units (e.g., "1400 mm")
+- `prop_motor_leistung` - Motor power (e.g., "129 kW")
+- `prop_klimaanlage`, `prop_oszillation` - Features (values: "Ja" or "Nein")
+- `prop_abgasstufe_eu`, `prop_motor_hersteller` - Text values
+- ... and 160+ more prop_ columns
+
+**Important Notes:**
+- German umlauts converted to ASCII: ae, oe, ue, ss (e.g., "Hoehe" not "Hohe")
+- Boolean properties use TEXT: `prop_klimaanlage = 'Ja'` (not true/false)
+- Values include units: "1400 mm", "620 kg", "129 kW"
+
+**SQL Examples:**
+```sql
+-- Equipment with air conditioning
+SELECT * FROM geraete WHERE prop_klimaanlage = 'Ja'
+
+-- Rollers with oscillation
+SELECT * FROM geraete WHERE geraetegruppe ILIKE '%walze%' AND prop_oszillation = 'Ja'
+```
 
 ### Pinecone Namespaces
 

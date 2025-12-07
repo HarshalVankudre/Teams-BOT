@@ -7,19 +7,24 @@ Improvements:
 - Redis for persistent conversation storage (per-user isolation)
 - Graceful fallback to in-memory storage if Redis unavailable
 - Custom RAG with Pinecone vector database
+- File export with temporary download links
 """
 import os
 import asyncio
+import uuid
+import base64
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from fastapi import FastAPI, Request, Response
+from fastapi.responses import StreamingResponse
 from openai import AsyncOpenAI
 import httpx
 import redis.asyncio as redis
 from dotenv import load_dotenv
 from commands import handle_command
 import time
+import io
 
 # Custom RAG imports
 from rag.search import RAGSearch
@@ -115,6 +120,17 @@ token_cache: TokenCache | None = None
 
 # Fallback in-memory storage (used when Redis unavailable)
 conversation_responses: dict[str, str] = {}
+
+# Temporary file storage for downloads (files expire after 10 minutes)
+@dataclass
+class TempFile:
+    file_data: bytes
+    file_name: str
+    mime_type: str
+    created_at: datetime
+
+temp_files: dict[str, TempFile] = {}
+FILE_EXPIRY_MINUTES = 10
 
 
 @asynccontextmanager
@@ -293,6 +309,49 @@ async def reset_conversation(request: Request):
         return {"status": "error", "message": str(e)}
 
 
+@app.get("/api/download/{file_id}")
+async def download_file(file_id: str):
+    """Download a temporary file by ID"""
+    # Clean up expired files first
+    now = datetime.utcnow()
+    expired = [fid for fid, f in temp_files.items()
+               if (now - f.created_at).total_seconds() > FILE_EXPIRY_MINUTES * 60]
+    for fid in expired:
+        del temp_files[fid]
+
+    # Check if file exists
+    if file_id not in temp_files:
+        return Response(
+            status_code=404,
+            content="File not found or expired"
+        )
+
+    temp_file = temp_files[file_id]
+
+    # Return file as download
+    return StreamingResponse(
+        io.BytesIO(temp_file.file_data),
+        media_type=temp_file.mime_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="{temp_file.file_name}"',
+            "Content-Length": str(len(temp_file.file_data))
+        }
+    )
+
+
+def store_temp_file(file_data: bytes, file_name: str, mime_type: str) -> str:
+    """Store a file temporarily and return its ID"""
+    file_id = str(uuid.uuid4())
+    temp_files[file_id] = TempFile(
+        file_data=file_data,
+        file_name=file_name,
+        mime_type=mime_type,
+        created_at=datetime.utcnow()
+    )
+    print(f"Stored temp file: {file_id} ({file_name}, {len(file_data)} bytes)")
+    return file_id
+
+
 @app.post("/api/messages")
 async def messages(request: Request):
     """Handle incoming messages from Microsoft Teams/Bot Framework"""
@@ -367,14 +426,18 @@ async def messages(request: Request):
                 start_time = time.time()
 
                 try:
-                    # Get response from Agent System
-                    assistant_response = await get_assistant_response_streaming(
+                    # Get response from Agent System (returns dict with 'response' and optional 'file_export')
+                    result = await get_assistant_response_streaming(
                         request, thread_key, user_message,
                         user_id=user_id, user_name=user_name
                     )
                 finally:
                     # Always stop typing indicator when done
                     typing_manager.stop()
+
+                # Extract response text and optional file export
+                assistant_response = result.get("response", "")
+                file_export = result.get("file_export")
 
                 # Calculate response time in milliseconds
                 response_time_ms = int((time.time() - start_time) * 1000)
@@ -396,7 +459,7 @@ async def messages(request: Request):
                 except Exception as fb_error:
                     print(f"[Feedback] Error storing conversation: {fb_error}")
 
-                # Send reply back to Teams
+                # Send reply back to Teams (with optional file attachment)
                 await send_reply(
                     request=request,
                     service_url=service_url,
@@ -405,7 +468,8 @@ async def messages(request: Request):
                     reply_to_id=body.get("id"),
                     recipient=body.get("from"),
                     from_bot=body.get("recipient"),
-                    message=assistant_response
+                    message=assistant_response,
+                    file_export=file_export
                 )
 
         elif activity_type == "conversationUpdate":
@@ -498,8 +562,12 @@ async def get_custom_rag_response(
     user_message: str,
     user_id: str = None,
     user_name: str = None
-) -> str:
-    """Get response using the Agent System with conversation continuity"""
+) -> dict:
+    """Get response using the Agent System with conversation continuity.
+
+    Returns:
+        dict with 'response' (str) and optionally 'file_export' (dict)
+    """
     print(f"Using Agent System (Agent System: {USE_AGENT_SYSTEM})...")
 
     try:
@@ -546,13 +614,23 @@ async def get_custom_rag_response(
                 response += f"\n- {source.get('title', 'Unbekannt')} ({source.get('source_file', '')}) [{score_pct:.0f}%]"
 
         print(f"Response generated using {result.get('chunks_used', 0)} sources")
-        return response
+
+        # Return dict with response and optional file export
+        result_dict = {"response": response}
+
+        # Check if file export is included
+        file_export = result.get("file_export")
+        if file_export:
+            print(f"File export included: {file_export.get('file_name')}")
+            result_dict["file_export"] = file_export
+
+        return result_dict
 
     except Exception as e:
         print(f"Agent System error: {e}")
         import traceback
         traceback.print_exc()
-        return f"Fehler bei der Verarbeitung: {str(e)}"
+        return {"response": f"Fehler bei der Verarbeitung: {str(e)}"}
 
 
 async def get_assistant_response_streaming(
@@ -561,8 +639,12 @@ async def get_assistant_response_streaming(
     user_message: str,
     user_id: str = None,
     user_name: str = None
-) -> str:
-    """Get response from Agent System or fallback to OpenAI Responses API"""
+) -> dict:
+    """Get response from Agent System or fallback to OpenAI Responses API.
+
+    Returns:
+        dict with 'response' (str) and optionally 'file_export' (dict)
+    """
 
     # Use Agent System / Custom RAG if enabled
     if USE_CUSTOM_RAG and rag_search:
@@ -646,9 +728,9 @@ async def get_assistant_response_streaming(
             print("  File search was used for this response")
 
         if accumulated_text:
-            return accumulated_text
+            return {"response": accumulated_text}
 
-        return "Keine Antwort erhalten."
+        return {"response": "Keine Antwort erhalten."}
 
     except Exception as e:
         print(f"Error getting streaming response: {e}")
@@ -691,12 +773,12 @@ async def get_assistant_response_streaming(
                     await store_conversation_id(request, thread_key, response_id)
 
                 if accumulated_text:
-                    return accumulated_text
+                    return {"response": accumulated_text}
 
             except Exception as retry_error:
                 print(f"Retry also failed: {retry_error}")
-                return f"Fehler: {str(retry_error)}"
-        return f"Fehler: {str(e)}"
+                return {"response": f"Fehler: {str(retry_error)}"}
+        return {"response": f"Fehler: {str(e)}"}
 
 
 async def get_bot_token(request: Request = None) -> str:
@@ -769,11 +851,36 @@ async def send_reply(
     reply_to_id: str,
     recipient: dict,
     from_bot: dict,
-    message: str
+    message: str,
+    file_export: dict = None
 ):
-    """Send reply back to Teams"""
+    """Send reply back to Teams with optional file attachment.
+
+    Args:
+        file_export: Optional dict with file_name, mime_type, base64_data
+    """
     try:
         token = await get_bot_token(request)
+        http_client = request.app.state.http_client
+
+        # If we have a file export, store it and add download link
+        if file_export:
+            file_name = file_export.get("file_name", "export.xlsx")
+            mime_type = file_export.get("mime_type", "application/octet-stream")
+            base64_data = file_export.get("base64_data", "")
+
+            if base64_data:
+                # Decode and store the file
+                file_bytes = base64.b64decode(base64_data)
+                file_id = store_temp_file(file_bytes, file_name, mime_type)
+
+                # Generate download URL
+                # Use the Cloud Run service URL
+                download_url = f"https://teams-bot-942547788950.us-central1.run.app/api/download/{file_id}"
+
+                # Add download link to message
+                file_size_kb = len(file_bytes) / 1024
+                message += f"\n\n📥 **[{file_name} herunterladen]({download_url})** ({file_size_kb:.1f} KB)\n*Link gültig für {FILE_EXPIRY_MINUTES} Minuten*"
 
         # Construct reply activity
         reply_activity = {
@@ -795,8 +902,6 @@ async def send_reply(
         if token:
             headers["Authorization"] = f"Bearer {token}"
 
-        # Use pooled HTTP client
-        http_client = request.app.state.http_client
         response = await http_client.post(
             url,
             json=reply_activity,
@@ -806,7 +911,7 @@ async def send_reply(
         if response.status_code not in [200, 201]:
             print(f"Failed to send reply: {response.status_code} - {response.text}")
         else:
-            print(f"Reply sent successfully")
+            print(f"Reply sent successfully" + (" with download link" if file_export else ""))
 
     except Exception as e:
         print(f"Error sending reply: {e}")

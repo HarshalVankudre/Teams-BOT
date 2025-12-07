@@ -1,15 +1,17 @@
 """
 Reviewer Agent (Reasoning Model)
 Reviews data from sub-agents and generates natural language responses.
-Handles smart display logic, pagination, and response formatting.
+Handles smart display logic, pagination, response formatting, and file exports.
 """
 import json
-from typing import List, Dict, Any, Optional
+import re
+from typing import List, Dict, Any, Optional, Tuple
 from openai import AsyncOpenAI
 
 from .base import BaseAgent, AgentContext, AgentResponse, AgentType
 from .registry import AgentMetadata, AgentCapability, register_agent
 from ..config import config
+from ..file_export import file_export_service, ExportResult
 
 
 # Agent metadata for registration
@@ -146,10 +148,118 @@ WICHTIG:
 
         return "VORHERIGE KONVERSATION:\n" + "\n".join(history_lines) + "\n\n"
 
+    def _detect_export_request(self, query: str) -> Tuple[bool, Optional[str]]:
+        """
+        Detect if the query is requesting a file export.
+
+        Returns:
+            Tuple of (is_export_request, format) where format is 'excel', 'pdf', or None
+        """
+        query_lower = query.lower()
+
+        # Excel keywords
+        excel_keywords = ['excel', 'xlsx', '.xlsx', 'spreadsheet', 'tabelle']
+        # PDF keywords
+        pdf_keywords = ['pdf', '.pdf']
+        # General export keywords
+        export_keywords = ['exportier', 'export', 'herunterladen', 'download', 'datei',
+                          'als datei', 'speichern', 'csv']
+
+        # Check for explicit format requests
+        for kw in excel_keywords:
+            if kw in query_lower:
+                return True, 'excel'
+
+        for kw in pdf_keywords:
+            if kw in query_lower:
+                return True, 'pdf'
+
+        # Check for general export request (default to Excel)
+        for kw in export_keywords:
+            if kw in query_lower:
+                return True, 'excel'  # Default to Excel
+
+        return False, None
+
+    def _get_export_data(self, context: AgentContext) -> List[Dict[str, Any]]:
+        """Extract exportable data from context"""
+        data = []
+
+        # Get SQL results
+        if context.sql_results:
+            for item in context.sql_results:
+                if '_results' in item:
+                    data.extend(item['_results'])
+                else:
+                    data.append(item)
+
+        return data
+
+    async def _handle_export(self, context: AgentContext, export_format: str) -> AgentResponse:
+        """Handle file export request"""
+        self.log(f"Export request detected: {export_format}")
+
+        # Get data to export
+        data = self._get_export_data(context)
+
+        if not data:
+            return AgentResponse.success_response(
+                data={"response": "Keine Daten zum Exportieren gefunden. Bitte zuerst eine Suchanfrage stellen."},
+                agent_type=self._agent_type,
+                reasoning="No data for export"
+            )
+
+        # Generate title from query context
+        title = "RUEKO Geraete-Export"
+        if context.reasoning:
+            # Try to extract a meaningful title
+            title = f"RUEKO Export - {len(data)} Datensaetze"
+
+        # Generate the file
+        if export_format == 'pdf':
+            result = file_export_service.export_to_pdf(data, title=title)
+            format_name = "PDF"
+        else:
+            result = file_export_service.export_to_excel(data, title=title)
+            format_name = "Excel"
+
+        if not result.success:
+            return AgentResponse.success_response(
+                data={"response": f"Export fehlgeschlagen: {result.error}"},
+                agent_type=self._agent_type,
+                reasoning="Export failed"
+            )
+
+        # Build response with file attachment
+        response_text = f"Hier ist dein {format_name}-Export mit {result.record_count} Datensaetzen."
+
+        self.log(f"Export successful: {result.file_name}, {len(result.file_data)} bytes")
+
+        return AgentResponse.success_response(
+            data={
+                "response": response_text,
+                "file_export": {
+                    "file_name": result.file_name,
+                    "mime_type": result.mime_type,
+                    "base64_data": result.base64_data,
+                    "record_count": result.record_count
+                }
+            },
+            agent_type=self._agent_type,
+            reasoning=f"Generated {format_name} export with {result.record_count} records"
+        )
+
     async def _execute(self, context: AgentContext) -> AgentResponse:
         """
         Generate a natural language response from all collected data.
+        Also handles file export requests.
         """
+        # Check for export request
+        is_export, export_format = self._detect_export_request(context.user_query)
+
+        if is_export:
+            return await self._handle_export(context, export_format)
+
         # Build context from all agent results
         data_context = self._build_data_context(context)
 
@@ -508,17 +618,14 @@ class ResponseFormatter:
                 lines.append(f"- Inventarnummer: {item['inventarnummer']}")
             lines.append("")
 
-        # Technical specs - check both direct columns and eigenschaften JSONB
+        # Technical specs - check direct columns, prop_* columns, and eigenschaften JSONB
         has_specs = False
         spec_lines = []
 
-        # Direct numeric columns
+        # Direct numeric columns (base columns)
         direct_specs = [
             ("gewicht_kg", "Gewicht", "kg"),
             ("motor_leistung_kw", "Motorleistung", "kW"),
-            ("breite_mm", "Breite", "mm"),
-            ("hoehe_mm", "Höhe", "mm"),
-            ("laenge_mm", "Länge", "mm"),
         ]
         for key, label, unit in direct_specs:
             val = item.get(key)
@@ -526,32 +633,51 @@ class ResponseFormatter:
                 spec_lines.append(f"- {label}: {val} {unit}")
                 has_specs = True
 
-        # JSONB eigenschaften (new format: {"Name": {"wert": val, "einheit": unit}})
-        props = item.get("eigenschaften", {}) or item.get("eigenschaften_json", {})
+        # Property columns (prop_* format - values include units)
+        prop_specs = [
+            ("prop_arbeitsbreite", "Arbeitsbreite"),
+            ("prop_transportbreite", "Transportbreite"),
+            ("prop_transportlaenge", "Transportlaenge"),
+            ("prop_einsatzgewicht", "Einsatzgewicht"),
+            ("prop_dienstgewicht", "Dienstgewicht"),
+            ("prop_nutzlast", "Nutzlast"),
+            ("prop_loeffelinhalt", "Loeffelinhalt"),
+            ("prop_reisstiefe", "Reisstiefe"),
+            ("prop_ausladung", "Ausladung"),
+            ("prop_fahrgeschwindigkeit", "Fahrgeschwindigkeit"),
+            ("prop_hubkraft", "Hubkraft"),
+            ("prop_motor_hersteller", "Motor-Hersteller"),
+            ("prop_motor_typ", "Motor-Typ"),
+            ("prop_abgasstufe_eu", "Abgasstufe EU"),
+        ]
+        for key, label in prop_specs:
+            val = item.get(key)
+            if val and val not in ["nicht-vorhanden", "", "Nein"]:
+                spec_lines.append(f"- {label}: {val}")
+                has_specs = True
+
+        # Fallback: JSONB eigenschaften column (backwards compatibility)
+        props = item.get("eigenschaften", {})
         if isinstance(props, str):
             try:
                 props = json.loads(props)
             except:
                 props = {}
-
-        # Extract additional specs from JSONB
-        jsonb_specs = [
-            ("Grabtiefe [mm]", "Grabtiefe", "mm"),
-            ("Arbeitsbreite [mm]", "Arbeitsbreite", "mm"),
-        ]
-        for key, label, unit in jsonb_specs:
-            prop = props.get(key, {})
-            if isinstance(prop, dict):
-                val = prop.get("wert")
-                if val and val not in ["nicht-vorhanden", "", "Ja"]:
-                    spec_lines.append(f"- {label}: {val} {unit}")
+        if props and isinstance(props, dict):
+            for key, value in list(props.items())[:10]:  # Limit to first 10
+                if isinstance(value, dict):
+                    val = value.get("wert")
+                else:
+                    val = value
+                if val and val not in ["nicht-vorhanden", "", "Nein"]:
+                    spec_lines.append(f"- {key}: {val}")
                     has_specs = True
 
         if has_specs:
             lines.append("**Technische Daten:**")
             lines.extend(spec_lines)
 
-        # Boolean features - check both direct columns and JSONB
+        # Boolean features - check direct columns, prop_* columns, and eigenschaften
         features = []
 
         # Direct boolean columns
@@ -560,18 +686,35 @@ class ResponseFormatter:
         if item.get("zentralschmierung") is True:
             features.append("Zentralschmierung")
 
-        # JSONB boolean features (have {"wert": "Ja"})
-        jsonb_features = {
-            "Hammerhydraulik": "Hammerhydraulik",
-            "Schnellwechsler (hydr.)": "Schnellwechsler",
-            "Oszillation": "Oszillation",
-            "Tiltrotator": "Tiltrotator",
-        }
-        for key, label in jsonb_features.items():
-            prop = props.get(key, {})
-            if isinstance(prop, dict) and prop.get("wert") == "Ja":
+        # Property columns with Ja/Nein values
+        prop_features = [
+            ("prop_hammerhydraulik", "Hammerhydraulik"),
+            ("prop_schnellwechsler_hydr", "Schnellwechsler"),
+            ("prop_oszillation", "Oszillation"),
+            ("prop_tiltrotator", "Tiltrotator"),
+            ("prop_gps", "GPS"),
+            ("prop_rueckfahrkamera", "Rueckfahrkamera"),
+        ]
+        for key, label in prop_features:
+            val = item.get(key)
+            if val and val == "Ja":
                 if label not in features:
                     features.append(label)
+
+        # Fallback: Check eigenschaften JSONB for boolean features
+        if props and isinstance(props, dict):
+            jsonb_features = {
+                "Klimaanlage": "Klimaanlage",
+                "Hammerhydraulik": "Hammerhydraulik",
+                "Schnellwechsler Hydr": "Schnellwechsler",
+                "Oszillation": "Oszillation",
+                "Tiltrotator": "Tiltrotator",
+            }
+            for key, label in jsonb_features.items():
+                prop = props.get(key, {})
+                if isinstance(prop, dict) and prop.get("wert") == "Ja":
+                    if label not in features:
+                        features.append(label)
 
         if features:
             lines.append(f"\n**Ausstattung:** {', '.join(features)}")
