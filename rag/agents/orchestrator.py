@@ -78,11 +78,27 @@ KONTEXT-BEWUSSTSEIN:
 {conversation_context}
 
 WICHTIG - FOLLOW-UP ANFRAGEN:
-Wenn der Benutzer Begriffe wie "davon", "diesen", "diese", "daraus", "von denen" verwendet:
+Wenn der Benutzer eine Frage stellt, die sich auf vorherige Ergebnisse beziehen KÖNNTE:
 1. Schaue in die vorherige Konversation um zu verstehen WORAUF sich die Anfrage bezieht
-2. ÜBERNEHME die Filter aus der vorherigen Anfrage!
+2. ÜBERNEHME Filter und IDs aus der vorherigen Anfrage!
 
-Beispiel:
+BEISPIELE für Follow-ups die DU VERSTEHEN MUSST:
+- "davon", "diesen", "diese", "daraus", "von denen" → klare Referenz
+- "zeig mir mehr", "mehr details", "alle eigenschaften" → bezieht sich auf ZULETZT besprochenes Gerät
+- "gib mir alle eigenschaften" → wenn vorher ein Gerät besprochen wurde, nutze DESSEN ID!
+- Kurze Fragen ohne Kontext → schaue was zuletzt besprochen wurde
+
+WICHTIGE REGEL:
+Wenn die vorherige Antwort ein SPEZIFISCHES GERÄT mit ID enthält und der Benutzer nach
+Eigenschaften/Details fragt OHNE eine neue ID zu nennen → nutze die letzte ID!
+
+Beispiel 1:
+- Vorher: "Zeige mir 74731565" → Antwort enthielt Gerät 74731565 - Dynapac MF 2500CS
+- Jetzt: "Gib mir alle eigenschaften"
+- RICHTIG: Eigenschaften von Gerät 74731565 abrufen (letzte ID wiederverwenden!)
+- FALSCH: Nach Klärung fragen (unnötig, Kontext ist klar!)
+
+Beispiel 2:
 - Vorher: "Wie viele Mietmaschinen?" → Ergebnis: 794 (WHERE verwendung='Vermietung')
 - Jetzt: "Wie viele davon sind von Bomag?"
 - RICHTIG: WHERE verwendung='Vermietung' AND hersteller='Bomag' (kombiniert beide Filter!)
@@ -142,7 +158,8 @@ REGELN:
         # Use last 10 messages (5 exchanges) for better context
         for entry in context.conversation_history[-10:]:
             role = entry.get("role", "unknown")
-            content = entry.get("content", "")[:500]  # Allow longer content for better understanding
+            # Allow longer content to capture machine IDs and details
+            content = entry.get("content", "")[:1500]
             history_lines.append(f"- {role}: {content}")
 
         return "Letzte Nachrichten:\n" + "\n".join(history_lines)

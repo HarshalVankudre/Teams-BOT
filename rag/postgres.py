@@ -170,9 +170,9 @@ class PostgresService:
                 id, bezeichnung, hersteller, kategorie, geraetegruppe,
                 seriennummer, inventarnummer, verwendung,
                 gewicht_kg, motor_leistung_kw, klimaanlage,
-                eigenschaften->'Arbeitsbreite [mm]'->>'wert' as arbeitsbreite_mm,
-                eigenschaften->'Motor - Hersteller'->>'wert' as motor_hersteller,
-                eigenschaften->'Abgasstufe EU'->>'wert' as abgasstufe_eu
+                prop_arbeitsbreite as arbeitsbreite_mm,
+                prop_motor_hersteller as motor_hersteller,
+                prop_abgasstufe_eu as abgasstufe_eu
             FROM geraete
             WHERE 1=1
         """
@@ -183,11 +183,16 @@ class PostgresService:
             sql += f" AND hersteller ILIKE '%{manufacturer}%'"
         if features:
             for feature, value in features.items():
-                # Check direct boolean columns first, then JSONB
+                # Check direct boolean columns first, then prop_ columns
                 if feature in ('klimaanlage', 'zentralschmierung'):
                     sql += f" AND {feature} = {str(value).lower()}"
                 else:
-                    sql += f" AND eigenschaften ? '{feature}'"
+                    # Convert feature name to prop_ column format
+                    prop_col = 'prop_' + feature.lower().replace(' ', '_').replace('-', '_')
+                    if value:
+                        sql += f" AND {prop_col} = 'Ja'"
+                    else:
+                        sql += f" AND ({prop_col} IS NULL OR {prop_col} = 'Nein')"
 
         sql += f" ORDER BY hersteller, bezeichnung LIMIT {limit}"
 
@@ -200,7 +205,12 @@ class PostgresService:
                 id, bezeichnung, hersteller, kategorie, geraetegruppe,
                 seriennummer, inventarnummer, verwendung,
                 gewicht_kg, motor_leistung_kw, klimaanlage, zentralschmierung,
-                eigenschaften
+                eigenschaften,
+                prop_arbeitsbreite, prop_transportbreite, prop_transportlaenge,
+                prop_motor_hersteller, prop_motor_typ, prop_abgasstufe_eu,
+                prop_einsatzgewicht, prop_dienstgewicht, prop_nutzlast,
+                prop_loeffelinhalt, prop_reisstiefe, prop_ausladung,
+                prop_fahrgeschwindigkeit, prop_hubkraft, prop_schaufelboden
             FROM geraete
             WHERE id = '{equipment_id}'
         """
@@ -226,7 +236,9 @@ class PostgresService:
             SELECT
                 id, bezeichnung, hersteller, kategorie, geraetegruppe,
                 seriennummer, inventarnummer, verwendung,
-                gewicht_kg, klimaanlage, eigenschaften
+                gewicht_kg, klimaanlage, motor_leistung_kw,
+                eigenschaften,
+                prop_arbeitsbreite, prop_motor_hersteller, prop_abgasstufe_eu
             FROM geraete
             WHERE {' OR '.join(conditions)}
             LIMIT 10

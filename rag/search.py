@@ -124,7 +124,7 @@ class RAGSearch:
                 print(f"[RAG] Agent System response in {result.execution_time_ms}ms")
                 print(f"[RAG] Agents used: {result.agents_used}")
 
-                return {
+                response_dict = {
                     "response": result.response,
                     "sources": result.sources,
                     "chunks_used": len(result.sources),
@@ -134,6 +134,13 @@ class RAGSearch:
                     "agents_used": result.agents_used,
                     "execution_time_ms": result.execution_time_ms
                 }
+
+                # Include file export if present
+                if result.file_export:
+                    response_dict["file_export"] = result.file_export
+                    print(f"[RAG] File export included: {result.file_export.get('file_name')}")
+
+                return response_dict
 
             except Exception as e:
                 print(f"[RAG] Agent System error: {e}, falling back to direct search")
