@@ -1,14 +1,10 @@
-"""
-RAG Search - Main entry point for the search pipeline.
-Routes queries through the multi-agent system or falls back to direct search.
-"""
-import time
-import os
+"""RAG Search entrypoint using the unified single-agent responder with Pinecone fallback."""
 from typing import List, Dict, Any, Optional
 from openai import AsyncOpenAI
 import pinecone
 
 from .config import config
+from .unified_agent import UnifiedAgent
 
 
 def model_supports_reasoning(model_name: str) -> bool:
@@ -20,14 +16,6 @@ def model_supports_reasoning(model_name: str) -> bool:
     return model_lower.startswith('o1') or model_lower.startswith('o3')
 
 
-# Import agent system
-try:
-    from .agents import AgentSystem, create_agent_system
-    AGENT_SYSTEM_AVAILABLE = True
-except ImportError as e:
-    AGENT_SYSTEM_AVAILABLE = False
-    print(f"[WARNING] Agent system not available: {e}")
-
 # Import embeddings for fallback
 from .vector_store import PineconeStore
 from .embeddings import EmbeddingService
@@ -35,10 +23,7 @@ from .embeddings import EmbeddingService
 
 class RAGSearch:
     """
-    RAG Search with multi-agent routing.
-
-    Primary mode: Agent System (orchestrator -> sub-agents -> reviewer)
-    Fallback mode: Direct Pinecone search
+    RAG Search with a single-agent routing model and Pinecone fallback.
     """
 
     def __init__(self, redis_client=None):
@@ -62,24 +47,18 @@ class RAGSearch:
         self.machinery_namespace = config.pinecone_machinery_namespace
         self.documents_namespace = config.pinecone_namespace
 
-        # Agent System
-        self.use_agent_system = config.use_agent_system and AGENT_SYSTEM_AVAILABLE
-        self.agent_system = None
-
-        if self.use_agent_system:
+        # Unified single agent (default)
+        self.use_unified_agent = config.use_single_agent
+        self.unified_agent = None
+        if self.use_unified_agent:
             try:
-                self.agent_system = create_agent_system(
-                    verbose=config.agent_verbose,
-                    enable_web_search=config.enable_web_search,
-                    parallel_execution=config.agent_parallel_execution,
-                    redis_client=redis_client
-                )
-                print("[RAG] Agent System: Enabled")
+                self.unified_agent = UnifiedAgent(redis_client=redis_client)
+                print("[RAG] Unified Agent: Enabled")
             except Exception as e:
-                print(f"[RAG] Agent System initialization failed: {e}")
-                self.use_agent_system = False
+                print(f"[RAG] Unified Agent initialization failed: {e}")
+                self.use_unified_agent = False
         else:
-            print("[RAG] Agent System: Disabled (using direct search)")
+            print("[RAG] Unified Agent: Disabled (will use direct search fallback)")
 
     async def search_and_generate(
         self,
@@ -109,42 +88,20 @@ class RAGSearch:
             Dict with response, sources, and metadata
         """
         top_k = top_k or config.search_top_k
-        start_time = time.time()
 
-        # PRIMARY: Use Agent System
-        if self.use_agent_system and self.agent_system:
+        # PRIMARY: Unified single agent
+        if self.use_unified_agent and self.unified_agent:
             try:
-                result = await self.agent_system.process(
-                    user_query=query,
+                result = await self.unified_agent.run(
+                    query=query,
                     user_id=user_id,
                     user_name=user_name,
                     thread_key=thread_key
                 )
-
-                print(f"[RAG] Agent System response in {result.execution_time_ms}ms")
-                print(f"[RAG] Agents used: {result.agents_used}")
-
-                response_dict = {
-                    "response": result.response,
-                    "sources": result.sources,
-                    "chunks_used": len(result.sources),
-                    "response_id": None,  # Agent system manages its own context
-                    "web_results_used": result.metadata.get("web_results_count", 0),
-                    "query_type": result.query_intent or "agent",
-                    "agents_used": result.agents_used,
-                    "execution_time_ms": result.execution_time_ms
-                }
-
-                # Include file export if present
-                if result.file_export:
-                    response_dict["file_export"] = result.file_export
-                    print(f"[RAG] File export included: {result.file_export.get('file_name')}")
-
-                return response_dict
-
+                print(f"[RAG] Unified agent response in {result.get('execution_time_ms', 0)}ms")
+                return result
             except Exception as e:
-                print(f"[RAG] Agent System error: {e}, falling back to direct search")
-                # Fall through to direct search
+                print(f"[RAG] Unified agent error: {e}")
 
         # FALLBACK: Direct Pinecone search
         return await self._fallback_search(

@@ -9,7 +9,9 @@
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?style=for-the-badge&logo=postgresql&logoColor=white)](https://postgresql.org)
 [![License](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)](LICENSE)
 
-A production-grade FastAPI backend that connects Microsoft Teams to OpenAI using a sophisticated **Multi-Agent Architecture**. The bot receives messages from Teams via Bot Framework, processes them through specialized AI agents, and returns intelligent responses with full multi-turn conversation support.
+A production-grade FastAPI backend that connects Microsoft Teams to OpenAI using a **unified single-agent pipeline**. The bot receives messages from Teams via Bot Framework, routes through one agent that can call tools (SQL, Pinecone, optional web search), and returns intelligent responses with full multi-turn conversation support.
+
+> Note: The former multi-agent orchestrator/sub-agent system has been retired in favor of the faster unified agent.
 
 ---
 
@@ -31,19 +33,12 @@ A production-grade FastAPI backend that connects Microsoft Teams to OpenAI using
 
 ## Features
 
-### Multi-Agent Intelligence
+### Unified Agent
 
-| Agent | Description |
-|-------|-------------|
-| **Orchestrator Agent** | Analyzes queries using GPT-5 reasoning and routes to appropriate sub-agents |
-| **SQL Agent** | Generates and executes SQL queries against PostgreSQL equipment database |
-| **Pinecone Agent** | Semantic search for recommendations and scenario-based queries |
-| **Web Search Agent** | External information retrieval via Tavily API |
-| **Reviewer Agent** | Synthesizes results from all agents into coherent responses |
-
-- Modular agent system with self-registration via decorators
-- Parallel execution of independent agents for optimal performance
-- Dynamic agent discovery from registry
+- Single GPT-5/4o chat model with tool-calling: SQL (PostgreSQL), semantic search (Pinecone), optional web search (Tavily).
+- One LLM turn to decide and call tools, one turn to answer; minimizes latency versus legacy multi-agent orchestration.
+- Redis-backed conversation context for short-term memory across turns.
+- Automatic safety on SQL (SELECT-only, limit enforcement) and Pinecone namespaces for documents vs. machinery data.
 
 ### Equipment Database
 
@@ -77,48 +72,35 @@ A production-grade FastAPI backend that connects Microsoft Teams to OpenAI using
 ## Architecture
 
 ```
-                                    +-------------------+
-                                    |  Microsoft Teams  |
-                                    +---------+---------+
-                                              |
-                                              v
-                                    +-------------------+
-                                    |   Bot Framework   |
-                                    +---------+---------+
-                                              |
-                                              v
-+---------------------------------------------------------------------------------+
-|                           FastAPI Backend (app.py)                              |
-|                                                                                 |
-|  +----------------+    +-----------------+    +------------------+              |
-|  | Token Caching  |    | Redis Session   |    | HTTP Connection  |              |
-|  | (Bot Framework)|    | Management      |    | Pooling          |              |
-|  +----------------+    +-----------------+    +------------------+              |
-+---------------------------------------------------------------------------------+
-                                              |
-                                              v
-+---------------------------------------------------------------------------------+
-|                           Multi-Agent System                                    |
-|                                                                                 |
-|  +-------------------+                                                          |
-|  |    Orchestrator   |  <-- GPT-5 Reasoning Model                               |
-|  |       Agent       |      Analyzes queries, plans execution                   |
-|  +---------+---------+                                                          |
-|            |                                                                    |
-|            +------------+------------+-------------+                            |
-|            |            |            |             |                            |
-|            v            v            v             v                            |
-|  +---------+---+ +------+-----+ +----+------+ +----+---------+                  |
-|  |  SQL Agent  | |  Pinecone  | | Web Search| |   Reviewer   |                  |
-|  |             | |   Agent    | |   Agent   | |    Agent     |                  |
-|  +------+------+ +------+-----+ +-----+-----+ +------+-------+                  |
-|         |               |             |              |                          |
-|         v               v             v              v                          |
-|  +------+------+ +------+-----+ +-----+-----+ +------+-------+                  |
-|  | PostgreSQL  | |  Pinecone  | |  Tavily   | |  Synthesizes |                  |
-|  |  Database   | | Vector DB  | |   API     | |   Response   |                  |
-|  +-------------+ +------------+ +-----------+ +--------------+                  |
-+---------------------------------------------------------------------------------+
+                         +-------------------+
+                         |  Microsoft Teams  |
+                         +---------+---------+
+                                   |
+                                   v
+                         +-------------------+
+                         |   Bot Framework   |
+                         +---------+---------+
+                                   |
+                                   v
++-------------------------------------------------------------------+
+|                        FastAPI Backend (app.py)                   |
+|   - Bot token caching                                             |
+|   - Redis conversation state (optional)                           |
+|   - HTTP connection pooling                                       |
++-------------------------------------------------------------------+
+                                   |
+                                   v
++-------------------------------------------------------------------+
+|                        Unified Agent (LLM)                        |
+|   - Single chat completion with tool-calling                      |
+|   - Tools: execute_sql, semantic_search, optional web_search      |
+|   - One tool round + one answer round                             |
++-------------------------------------------------------------------+
+    |                  |                         |
+    v                  v                         v
+PostgreSQL         Pinecone                Tavily (optional)
+(structured)       (documents +            (external web)
+                   machinery namespaces)
 ```
 
 ### Message Flow
@@ -251,13 +233,11 @@ CONVERSATION_TTL_HOURS=24
 TAVILY_API_KEY=your-tavily-api-key
 ```
 
-#### Optional - Agent System
+#### Optional - RAG / Unified Agent
 
 ```env
 USE_CUSTOM_RAG=true
-USE_AGENT_SYSTEM=true
-AGENT_VERBOSE=false
-AGENT_PARALLEL_EXECUTION=true
+USE_SINGLE_AGENT=true
 ```
 
 ---
@@ -413,7 +393,7 @@ teams-bot/
 |-- Dockerfile                # Container configuration
 |-- .env                      # Environment variables (not committed)
 |
-|-- rag/                      # RAG and Agent System
+|-- rag/                      # RAG and unified agent
 |   |-- __init__.py
 |   |-- config.py             # Configuration management
 |   |-- search.py             # RAG search coordinator
@@ -423,17 +403,7 @@ teams-bot/
 |   |-- chunker.py            # Document chunking
 |   |-- processor.py          # Document processing
 |   |-- feedback.py           # Feedback tracking
-|   |
-|   |-- agents/               # Multi-Agent System
-|       |-- __init__.py
-|       |-- base.py           # Base agent class and context
-|       |-- registry.py       # Agent registry with decorators
-|       |-- agent_system.py   # Main coordinator
-|       |-- orchestrator.py   # Query analysis and routing (GPT-5)
-|       |-- sql_agent.py      # SQL generation and execution
-|       |-- pinecone_agent.py # Semantic vector search
-|       |-- web_search_agent.py  # Tavily integration
-|       |-- reviewer_agent.py # Response synthesis
+|   |-- unified_agent.py      # Single-agent responder with tools
 |
 |-- scripts/                  # Utility scripts
 |   |-- index_documents.py    # Document indexing to Pinecone
