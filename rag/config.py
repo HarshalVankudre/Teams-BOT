@@ -47,10 +47,9 @@ class RAGConfig:
     max_chunk_tokens: int = int(os.getenv("MAX_CHUNK_TOKENS", "500"))
     min_chunk_tokens: int = int(os.getenv("MIN_CHUNK_TOKENS", "50"))
 
-    # Agent System Settings
-    use_agent_system: bool = os.getenv("USE_AGENT_SYSTEM", "true").lower() == "true"
-    agent_parallel_execution: bool = os.getenv("AGENT_PARALLEL_EXECUTION", "true").lower() == "true"
-    agent_verbose: bool = os.getenv("AGENT_VERBOSE", "false").lower() == "true"
+    # Agent Settings
+    # Unified single-agent mode (preferred for performance)
+    use_single_agent: bool = os.getenv("USE_SINGLE_AGENT", "true").lower() == "true"
 
     # Conversation Settings
     conversation_ttl_hours: int = int(os.getenv("CONVERSATION_TTL_HOURS", "24"))

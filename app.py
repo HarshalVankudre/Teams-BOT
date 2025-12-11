@@ -49,10 +49,9 @@ VECTOR_STORE_ID = os.getenv("VECTOR_STORE_ID", "")
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 CONVERSATION_TTL_HOURS = int(os.getenv("CONVERSATION_TTL_HOURS", "24"))
 
-# RAG and Agent System configuration
+# RAG configuration
 USE_CUSTOM_RAG = os.getenv("USE_CUSTOM_RAG", "true").lower() == "true"
-USE_AGENT_SYSTEM = os.getenv("USE_AGENT_SYSTEM", "true").lower() == "true"
-AGENT_VERBOSE = os.getenv("AGENT_VERBOSE", "false").lower() == "true"
+USE_SINGLE_AGENT = os.getenv("USE_SINGLE_AGENT", "true").lower() == "true"
 
 SYSTEM_INSTRUCTIONS = os.getenv("SYSTEM_INSTRUCTIONS", """Du bist RÜKO GPT mit Zugriff auf interne Datenbanken und ergänzende Web-Suche.
 
@@ -99,8 +98,7 @@ print(f"Vector Store ID: {VECTOR_STORE_ID}")
 print(f"Redis URL: {REDIS_URL[:50]}..." if len(REDIS_URL) > 50 else f"Redis URL: {REDIS_URL}")
 print(f"Conversation TTL: {CONVERSATION_TTL_HOURS} hours")
 print(f"Custom RAG (Pinecone): {'Enabled' if USE_CUSTOM_RAG else 'Disabled'}")
-print(f"Agent System: {'Enabled' if USE_AGENT_SYSTEM else 'Disabled'}")
-print(f"Agent Verbose: {'Enabled' if AGENT_VERBOSE else 'Disabled'}")
+print(f"Unified Agent: {'Enabled' if USE_SINGLE_AGENT else 'Disabled'}")
 
 # Initialize async OpenAI client for streaming
 client = AsyncOpenAI(api_key=OPENAI_API_KEY)
@@ -170,7 +168,7 @@ async def lifespan(app: FastAPI):
         if app.state.redis_available and app.state.redis_pool:
             redis_client = redis.Redis(connection_pool=app.state.redis_pool)
         rag_search = RAGSearch(redis_client=redis_client)
-        print(f"[OK] RAG Search initialized (Agent System: {USE_AGENT_SYSTEM})")
+        print(f"[OK] RAG Search initialized (Unified Agent: {USE_SINGLE_AGENT})")
 
     yield  # Application runs here
 
@@ -426,7 +424,7 @@ async def messages(request: Request):
                 start_time = time.time()
 
                 try:
-                    # Get response from Agent System (returns dict with 'response' and optional 'file_export')
+                    # Get response from unified agent (returns dict with 'response' and optional 'file_export')
                     result = await get_assistant_response_streaming(
                         request, thread_key, user_message,
                         user_id=user_id, user_name=user_name
@@ -444,7 +442,7 @@ async def messages(request: Request):
 
                 # Store conversation in feedback database
                 try:
-                    data_source = "agent_system" if USE_AGENT_SYSTEM else ("custom_rag" if USE_CUSTOM_RAG else "openai_file_search")
+                    data_source = "unified_agent" if USE_CUSTOM_RAG else "openai_file_search"
                     feedback_service.save_conversation(
                         user_id=user_id,
                         user_message=user_message,
@@ -563,12 +561,12 @@ async def get_custom_rag_response(
     user_id: str = None,
     user_name: str = None
 ) -> dict:
-    """Get response using the Agent System with conversation continuity.
+    """Get response using the unified agent with conversation continuity.
 
     Returns:
         dict with 'response' (str) and optionally 'file_export' (dict)
     """
-    print(f"Using Agent System (Agent System: {USE_AGENT_SYSTEM})...")
+    print(f"Using unified agent (USE_CUSTOM_RAG={USE_CUSTOM_RAG}, USE_SINGLE_AGENT={USE_SINGLE_AGENT})...")
 
     try:
         # Get previous response ID for conversation continuity (fallback mode)
@@ -576,7 +574,7 @@ async def get_custom_rag_response(
         if previous_response_id:
             print(f"Continuing conversation for {thread_key}")
 
-        # Search and generate response using agent system
+        # Search and generate response using unified agent
         result = await rag_search.search_and_generate(
             query=user_message,
             system_instructions=SYSTEM_INSTRUCTIONS,
@@ -588,7 +586,7 @@ async def get_custom_rag_response(
 
         response = result["response"]
 
-        # Log agent system info
+        # Log agent info
         agents_used = result.get("agents_used", [])
         query_type = result.get("query_type", "unknown")
         execution_time = result.get("execution_time_ms", 0)
@@ -627,7 +625,7 @@ async def get_custom_rag_response(
         return result_dict
 
     except Exception as e:
-        print(f"Agent System error: {e}")
+        print(f"Unified agent error: {e}")
         import traceback
         traceback.print_exc()
         return {"response": f"Fehler bei der Verarbeitung: {str(e)}"}
@@ -640,13 +638,13 @@ async def get_assistant_response_streaming(
     user_id: str = None,
     user_name: str = None
 ) -> dict:
-    """Get response from Agent System or fallback to OpenAI Responses API.
+    """Get response from the unified agent or fallback to OpenAI Responses API.
 
     Returns:
         dict with 'response' (str) and optionally 'file_export' (dict)
     """
 
-    # Use Agent System / Custom RAG if enabled
+    # Use unified agent / Custom RAG if enabled
     if USE_CUSTOM_RAG and rag_search:
         return await get_custom_rag_response(
             request, thread_key, user_message,

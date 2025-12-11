@@ -1,20 +1,5 @@
 """
-Interactive CLI Testing Tool for RUKO Multi-Agent System
-
-Features:
-- Interactive prompt for testing queries
-- Extensive logging of all agent steps
-- Timing information for each operation
-- Agent registry inspection
-- Session statistics
-
-Commands:
-  /quit or /exit  - Exit the CLI
-  /agents         - List all registered agents
-  /stats          - Show session statistics
-  /clear          - Clear screen
-  /verbose on/off - Toggle verbose mode
-  /help           - Show help
+Interactive CLI Testing Tool for the unified single-agent system.
 """
 import asyncio
 import sys
@@ -34,6 +19,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from dotenv import load_dotenv
 load_dotenv()
 
+from rag.search import RAGSearch
+
+
 # ANSI color codes for terminal output
 class Colors:
     HEADER = '\033[95m'
@@ -48,60 +36,38 @@ class Colors:
 
 
 def colored(text: str, color: str) -> str:
-    """Apply color to text"""
     return f"{color}{text}{Colors.ENDC}"
 
 
 def print_header(text: str):
-    """Print a header line"""
     print(colored(f"\n{'='*70}", Colors.CYAN))
     print(colored(f"  {text}", Colors.CYAN + Colors.BOLD))
     print(colored(f"{'='*70}", Colors.CYAN))
 
 
 def print_section(title: str):
-    """Print a section header"""
     print(colored(f"\n--- {title} ---", Colors.YELLOW))
 
 
 def print_step(step: str, details: str = ""):
-    """Print a step in the process"""
     timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
     print(colored(f"[{timestamp}]", Colors.DIM) + colored(f" >> {step}", Colors.GREEN) + (f" {details}" if details else ""))
 
 
-def print_agent(agent_name: str, message: str):
-    """Print agent-specific message"""
-    timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-    agent_color = {
-        "ORCHESTRATOR": Colors.BLUE,
-        "SQL": Colors.GREEN,
-        "PINECONE": Colors.CYAN,
-        "WEB_SEARCH": Colors.YELLOW,
-        "REVIEWER": Colors.HEADER,
-        "AGENT_SYSTEM": Colors.BOLD,
-    }.get(agent_name, Colors.ENDC)
-    print(colored(f"[{timestamp}]", Colors.DIM) + colored(f" [{agent_name}]", agent_color) + f" {message}")
-
-
 def print_error(message: str):
-    """Print error message"""
     print(colored(f"ERROR: {message}", Colors.RED))
 
 
 def print_success(message: str):
-    """Print success message"""
     print(colored(f"SUCCESS: {message}", Colors.GREEN))
 
 
 def print_info(message: str):
-    """Print info message"""
     print(colored(f"INFO: {message}", Colors.BLUE))
 
 
 @dataclass
 class SessionStats:
-    """Track session statistics"""
     queries_total: int = 0
     queries_success: int = 0
     queries_failed: int = 0
@@ -131,16 +97,14 @@ class SessionStats:
         return f"{minutes}m {seconds}s"
 
 
-class VerboseAgentSystem:
-    """Wrapper around AgentSystem with enhanced logging"""
+class SingleAgentRunner:
+    """Wrapper around RAGSearch + unified agent."""
 
     def __init__(self):
         import redis.asyncio as redis
-        from rag.agents import create_agent_system, AgentRegistry
 
-        print_step("Initializing Agent System...")
+        print_step("Initializing unified agent...")
 
-        # Initialize Redis for conversation persistence
         self.redis_client = None
         redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
         try:
@@ -149,9 +113,7 @@ class VerboseAgentSystem:
         except Exception as e:
             print_info(f"Redis not available ({e}), using in-memory only")
 
-        # Create system with verbose mode and Redis
-        self.system = create_agent_system(verbose=True, redis_client=self.redis_client)
-        self.registry = AgentRegistry
+        self.rag = RAGSearch(redis_client=self.redis_client)
 
         # Generate a session thread_key for conversation continuity
         import uuid
@@ -159,111 +121,68 @@ class VerboseAgentSystem:
         self.thread_key = f"cli_test_user:{self.session_id}"
         print_info(f"Session thread_key: {self.thread_key}")
 
-        print_success("Agent System initialized")
-        self._print_registered_agents()
-
-    def _print_registered_agents(self):
-        """Print all registered agents"""
-        agents = self.registry.get_all_agents()
-        print_section(f"Registered Agents ({len(agents)})")
-
-        for agent_id, metadata in agents.items():
-            reasoning_tag = colored("[REASONING]", Colors.YELLOW) if metadata.uses_reasoning else colored("[FAST]", Colors.GREEN)
-            invokable_tag = colored("[INVOKABLE]", Colors.CYAN) if metadata.direct_invocation else colored("[INTERNAL]", Colors.DIM)
-
-            print(f"  {colored(metadata.name, Colors.BOLD)}")
-            print(f"    ID: {agent_id} {reasoning_tag} {invokable_tag}")
-            print(f"    {metadata.description}")
-            if metadata.default_model:
-                print(f"    Model: {metadata.default_model}")
-            print()
+        print_success("Unified agent initialized")
 
     async def process_query(self, query: str) -> Dict[str, Any]:
-        """Process a query with extensive logging"""
-        print_header(f"PROCESSING QUERY")
+        """Process a query with logging."""
+        print_header("PROCESSING QUERY")
         print(f"\n{colored('Query:', Colors.BOLD)} {query}\n")
 
         start_time = time.time()
-
-        # Track timing for each phase
-        timings = {}
-
-        # Phase 1: Context Setup
-        phase_start = time.time()
-        print_step("Phase 1: Context Setup")
-        timings['context_setup'] = int((time.time() - phase_start) * 1000)
-
-        # Process through the system with thread_key for conversation continuity
-        result = await self.system.process(
-            user_query=query,
+        result = await self.rag.search_and_generate(
+            query=query,
             user_id='cli_test_user',
             user_name='CLI Tester',
             thread_key=self.thread_key
         )
-
         total_time = int((time.time() - start_time) * 1000)
 
-        # Print results
+        agents_used = result.get("agents_used") or []
+
         print_section("RESULTS")
-        print(f"  {colored('Success:', Colors.BOLD)} {colored('Yes', Colors.GREEN) if result.success else colored('No', Colors.RED)}")
-        print(f"  {colored('Query Intent:', Colors.BOLD)} {result.query_intent or 'Unknown'}")
-        print(f"  {colored('Agents Used:', Colors.BOLD)} {' -> '.join(result.agents_used)}")
-        print(f"  {colored('Execution Time:', Colors.BOLD)} {result.execution_time_ms}ms")
+        print(f"  {colored('Success:', Colors.BOLD)} {colored('Yes', Colors.GREEN)}")
+        print(f"  {colored('Query Type:', Colors.BOLD)} {result.get('query_type')}")
+        print(f"  {colored('Agents Used:', Colors.BOLD)} {', '.join(agents_used)}")
+        print(f"  {colored('Execution Time:', Colors.BOLD)} {result.get('execution_time_ms')}ms")
 
-        if result.error:
-            print(f"  {colored('Error:', Colors.RED)} {result.error}")
-
-        # Print metadata
-        if result.metadata:
-            print_section("METADATA")
-            for key, value in result.metadata.items():
-                print(f"  {key}: {value}")
-
-        # Print response
         print_section("RESPONSE")
         print(colored("-" * 50, Colors.DIM))
-        print(result.response)
+        print(result.get("response"))
         print(colored("-" * 50, Colors.DIM))
 
+        sources = result.get("sources") or []
+        if sources:
+            print_section("SOURCES")
+            for src in sources[:5]:
+                print(f"  - {src.get('title')} ({src.get('namespace')})")
+
         return {
-            'success': result.success,
-            'time_ms': result.execution_time_ms,
-            'agents': result.agents_used,
-            'intent': result.query_intent,
-            'response': result.response
+            'success': True,
+            'time_ms': total_time,
+            'agents': agents_used or ["single_agent"]
         }
 
 
 def print_help():
-    """Print help information"""
     print_header("CLI TEST TOOL - HELP")
     print("""
 Commands:
   /quit, /exit    Exit the CLI
-  /agents         List all registered agents with details
   /stats          Show session statistics
   /clear          Clear the screen
   /reset          Reset conversation history (start fresh)
-  /verbose on/off Toggle verbose logging
   /help           Show this help message
 
 Example queries:
   - Wie viele Bagger haben wir?
   - Liste alle Kettenbagger von Liebherr
-  - Welche Geraete haben GPS?
-  - Empfehle mir einen Bagger fuer schwere Einsaetze
+  - Welche Geräte haben GPS?
+  - Empfehle mir einen Bagger für schwere Einsätze
   - Vergleich Kettenbagger vs Mobilbagger
-
-Multi-turn conversation example:
-  You > Wie viele Mietmaschinen haben wir?
-  AI  > Wir haben 794 Mietmaschinen...
-  You > Wie viele davon sind von Bomag?
-  AI  > Von den 794 Mietmaschinen sind 45 von Bomag...
 """)
 
 
 def print_stats(stats: SessionStats):
-    """Print session statistics"""
     print_header("SESSION STATISTICS")
     print(f"""
   Session Duration: {stats.session_duration()}
@@ -280,97 +199,67 @@ def print_stats(stats: SessionStats):
   Agent Usage:""")
 
     for agent, count in sorted(stats.agents_invoked.items(), key=lambda x: -x[1]):
-        bar = colored("█" * min(count * 2, 20), Colors.CYAN)
+        bar = colored("#" * min(count * 2, 20), Colors.CYAN)
         print(f"    {agent:15} {bar} {count}")
 
 
 def clear_screen():
-    """Clear the terminal screen"""
     os.system('cls' if os.name == 'nt' else 'clear')
 
 
 async def main():
-    """Main CLI loop"""
     clear_screen()
 
     print(colored("""
-    ╔═══════════════════════════════════════════════════════════════╗
-    ║                                                               ║
-    ║   RUKO Multi-Agent System - Interactive CLI Tester            ║
-    ║                                                               ║
-    ║   Type your questions to test the system                      ║
-    ║   Type /help for available commands                           ║
-    ║   Type /quit to exit                                          ║
-    ║                                                               ║
-    ╚═══════════════════════════════════════════════════════════════╝
+    ==============================================
+       RUKO Unified Agent - Interactive CLI
+    ==============================================
+    Type your questions to test the system
+    Type /help for available commands
+    Type /quit to exit
     """, Colors.CYAN))
 
-    # Initialize the system
     try:
-        agent_system = VerboseAgentSystem()
+        agent_system = SingleAgentRunner()
     except Exception as e:
         print_error(f"Failed to initialize agent system: {e}")
         return
 
     stats = SessionStats()
-
     print(colored("\nReady for queries!", Colors.GREEN + Colors.BOLD))
 
     while True:
         try:
-            # Get user input
             print()
             user_input = input(colored("You > ", Colors.BOLD + Colors.BLUE)).strip()
 
             if not user_input:
                 continue
 
-            # Handle commands
             if user_input.startswith('/'):
                 cmd = user_input.lower().split()[0]
-                args = user_input.split()[1:] if len(user_input.split()) > 1 else []
 
                 if cmd in ['/quit', '/exit']:
                     print_stats(stats)
                     print(colored("\nGoodbye!", Colors.CYAN))
                     break
-
                 elif cmd == '/help':
                     print_help()
-
-                elif cmd == '/agents':
-                    agent_system._print_registered_agents()
-
                 elif cmd == '/stats':
                     print_stats(stats)
-
                 elif cmd == '/clear':
                     clear_screen()
-
                 elif cmd == '/reset':
-                    # Reset conversation history by generating new thread_key
                     import uuid
                     old_key = agent_system.thread_key
                     agent_system.session_id = str(uuid.uuid4())[:8]
                     agent_system.thread_key = f"cli_test_user:{agent_system.session_id}"
                     print_success(f"Conversation reset! New session: {agent_system.thread_key}")
                     print_info(f"Previous session ({old_key}) history cleared from context")
-
-                elif cmd == '/verbose':
-                    if args and args[0] in ['on', 'off']:
-                        agent_system.system.config.verbose = (args[0] == 'on')
-                        print_info(f"Verbose mode: {args[0]}")
-                    else:
-                        current = "on" if agent_system.system.config.verbose else "off"
-                        print_info(f"Verbose mode is currently: {current}")
-                        print_info("Usage: /verbose on|off")
-
                 else:
                     print_error(f"Unknown command: {cmd}")
                     print_info("Type /help for available commands")
-
             else:
-                # Process as a query
                 try:
                     result = await agent_system.process_query(user_input)
                     stats.add_query(
@@ -387,7 +276,6 @@ async def main():
             print_stats(stats)
             print(colored("\nGoodbye!", Colors.CYAN))
             break
-
         except EOFError:
             print(colored("\n\nEnd of input", Colors.YELLOW))
             break
