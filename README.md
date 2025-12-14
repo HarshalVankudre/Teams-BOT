@@ -1,487 +1,211 @@
-# Teams-BOT
+<p align="center">
+  <img src="outline.png" alt="Teams-BOT" width="120" />
+</p>
 
-[![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
-[![OpenAI](https://img.shields.io/badge/OpenAI-GPT--5-412991?style=for-the-badge&logo=openai&logoColor=white)](https://openai.com)
-[![Microsoft Teams](https://img.shields.io/badge/Microsoft_Teams-6264A7?style=for-the-badge&logo=microsoft-teams&logoColor=white)](https://teams.microsoft.com)
-[![Google Cloud](https://img.shields.io/badge/Google_Cloud_Run-4285F4?style=for-the-badge&logo=google-cloud&logoColor=white)](https://cloud.google.com/run)
-[![Redis](https://img.shields.io/badge/Redis-DC382D?style=for-the-badge&logo=redis&logoColor=white)](https://redis.io)
-[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?style=for-the-badge&logo=postgresql&logoColor=white)](https://postgresql.org)
-[![License](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)](LICENSE)
+<h1 align="center">Teams-BOT</h1>
 
-A production-grade FastAPI backend that connects Microsoft Teams to OpenAI using a sophisticated **Multi-Agent Architecture**. The bot receives messages from Teams via Bot Framework, processes them through specialized AI agents, and returns intelligent responses with full multi-turn conversation support.
+<p align="center">
+  A production-ready FastAPI backend for a Microsoft Teams bot powered by OpenAI + RAG (PostgreSQL + Pinecone).
+</p>
 
----
-
-## Table of Contents
-
-- [Features](#features)
-- [Architecture](#architecture)
-- [Tech Stack](#tech-stack)
-- [Installation](#installation)
-- [Configuration](#configuration)
-- [Usage](#usage)
-- [API Reference](#api-reference)
-- [Deployment](#deployment)
-- [Project Structure](#project-structure)
-- [Contributing](#contributing)
-- [License](#license)
+<p align="center">
+  <a href="https://python.org"><img alt="Python" src="https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white"></a>
+  <a href="https://fastapi.tiangolo.com"><img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-0.115-009688?style=flat-square&logo=fastapi&logoColor=white"></a>
+  <a href="https://openai.com"><img alt="OpenAI" src="https://img.shields.io/badge/OpenAI-API-412991?style=flat-square&logo=openai&logoColor=white"></a>
+  <a href="https://cloud.google.com/run"><img alt="Cloud Run" src="https://img.shields.io/badge/Google_Cloud_Run-4285F4?style=flat-square&logo=google-cloud&logoColor=white"></a>
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/License-MIT-yellow?style=flat-square"></a>
+</p>
 
 ---
 
-## Features
+## What this is
 
-### Multi-Agent Intelligence
+Teams-BOT connects **Microsoft Teams** (via **Bot Framework**) to an LLM-backed assistant with **tool access**:
 
-| Agent | Description |
-|-------|-------------|
-| **Orchestrator Agent** | Analyzes queries using GPT-5 reasoning and routes to appropriate sub-agents |
-| **SQL Agent** | Generates and executes SQL queries against PostgreSQL equipment database |
-| **Pinecone Agent** | Semantic search for recommendations and scenario-based queries |
-| **Web Search Agent** | External information retrieval via Tavily API |
-| **Reviewer Agent** | Synthesizes results from all agents into coherent responses |
+- **Structured data**: PostgreSQL (`geraete` view) via safe, SELECT-only SQL
+- **Unstructured/internal docs**: Pinecone semantic search (documents + machinery namespaces)
+- **Optional web**: Tavily search for supplemental, external info
+- **Multi-turn conversations**: Redis-backed history with per-user isolation
+- **Better follow-ups**: conversation-aware query rewriting + multi-query semantic retrieval (no hardcoded synonym lists)
 
-- Modular agent system with self-registration via decorators
-- Parallel execution of independent agents for optimal performance
-- Dynamic agent discovery from registry
-
-### Equipment Database
-
-- PostgreSQL database with **2,395+ construction equipment records** (Baumaschinen)
-- Tracks manufacturers: Caterpillar, Liebherr, Bomag, Vogele, Hamm, Wirtgen, Kubota, Volvo, Hitachi, Komatsu
-- Equipment types: excavators, rollers, pavers, milling machines
-- Detailed specifications stored in JSONB: weight, power, dimensions, features, availability status
-
-### Enterprise Features
-
-| Feature | Description |
-|---------|-------------|
-| **OpenAI Responses API** | Latest synchronous API with streaming - no polling required |
-| **Multi-Turn Conversations** | Full context via `previous_response_id` for natural dialogue |
-| **Redis Persistence** | Conversation storage with configurable TTL expiration |
-| **Per-User Isolation** | Individual conversation threads even in group chats |
-| **Typing Indicators** | Continuous feedback during AI processing |
-| **Feedback Tracking** | Analytics and conversation logging |
-| **Graceful Fallback** | In-memory storage when Redis is unavailable |
-
-### Cloud-Native Design
-
-- Docker containerization
-- Google Cloud Run deployment
-- Azure Bot Framework integration
-- Connection pooling and token caching
-- HTTP client pooling for high performance
+> For setup details and operational notes, see [`SETUP_GUIDE.md`](SETUP_GUIDE.md).
 
 ---
 
-## Architecture
+## Quickstart (local)
 
-```
-                                    +-------------------+
-                                    |  Microsoft Teams  |
-                                    +---------+---------+
-                                              |
-                                              v
-                                    +-------------------+
-                                    |   Bot Framework   |
-                                    +---------+---------+
-                                              |
-                                              v
-+---------------------------------------------------------------------------------+
-|                           FastAPI Backend (app.py)                              |
-|                                                                                 |
-|  +----------------+    +-----------------+    +------------------+              |
-|  | Token Caching  |    | Redis Session   |    | HTTP Connection  |              |
-|  | (Bot Framework)|    | Management      |    | Pooling          |              |
-|  +----------------+    +-----------------+    +------------------+              |
-+---------------------------------------------------------------------------------+
-                                              |
-                                              v
-+---------------------------------------------------------------------------------+
-|                           Multi-Agent System                                    |
-|                                                                                 |
-|  +-------------------+                                                          |
-|  |    Orchestrator   |  <-- GPT-5 Reasoning Model                               |
-|  |       Agent       |      Analyzes queries, plans execution                   |
-|  +---------+---------+                                                          |
-|            |                                                                    |
-|            +------------+------------+-------------+                            |
-|            |            |            |             |                            |
-|            v            v            v             v                            |
-|  +---------+---+ +------+-----+ +----+------+ +----+---------+                  |
-|  |  SQL Agent  | |  Pinecone  | | Web Search| |   Reviewer   |                  |
-|  |             | |   Agent    | |   Agent   | |    Agent     |                  |
-|  +------+------+ +------+-----+ +-----+-----+ +------+-------+                  |
-|         |               |             |              |                          |
-|         v               v             v              v                          |
-|  +------+------+ +------+-----+ +-----+-----+ +------+-------+                  |
-|  | PostgreSQL  | |  Pinecone  | |  Tavily   | |  Synthesizes |                  |
-|  |  Database   | | Vector DB  | |   API     | |   Response   |                  |
-|  +-------------+ +------------+ +-----------+ +--------------+                  |
-+---------------------------------------------------------------------------------+
-```
-
-### Message Flow
-
-1. Teams sends POST to `/api/messages` via Bot Framework
-2. Bot extracts user message and removes @mentions
-3. Orchestrator Agent analyzes query intent using GPT-5
-4. Orchestrator plans which sub-agents to invoke
-5. Sub-agents execute in parallel (SQL, Pinecone, Web Search)
-6. Reviewer Agent synthesizes all results into coherent response
-7. Response sent back to Teams with conversation context preserved
-
----
-
-## Tech Stack
-
-| Category | Technology |
-|----------|------------|
-| **Backend Framework** | FastAPI + Uvicorn |
-| **AI Models** | OpenAI GPT-5 / GPT-4o (Responses API) |
-| **Database** | PostgreSQL (psycopg2) |
-| **Vector Database** | Pinecone |
-| **Session Storage** | Redis |
-| **Web Search** | Tavily API |
-| **Bot Framework** | Microsoft Bot Framework |
-| **Document Processing** | PyMuPDF, python-docx, openpyxl |
-| **Containerization** | Docker |
-| **Cloud Platform** | Google Cloud Run |
-| **Authentication** | Azure AD (Single-tenant) |
-
----
-
-## Installation
-
-### Prerequisites
-
-- Python 3.11+
-- PostgreSQL database with equipment data
-- Pinecone account and index
-- Redis instance (optional, falls back to in-memory)
-- Azure Bot Service registration
-- OpenAI API key
-
-### Local Setup
-
-1. **Clone the repository**
+### 1) Install
 
 ```bash
-git clone https://github.com/HarshalVankudre/Teams-BOT.git
-cd Teams-BOT
-```
+python -m venv .venv
+# Windows:
+#   .\.venv\Scripts\activate
+# macOS/Linux:
+#   source .venv/bin/activate
 
-2. **Create virtual environment**
-
-```bash
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-```
-
-3. **Install dependencies**
-
-```bash
 pip install -r requirements.txt
 ```
 
-4. **Configure environment variables**
+### 2) Configure
 
-Create a `.env` file in the project root (see [Configuration](#configuration) section).
+Copy `.env.example` -> `.env` and fill in required values.
 
-5. **Run the application**
+Minimum required keys:
+
+```env
+OPENAI_API_KEY=
+OPENAI_MODEL=
+REASONING_EFFORT=
+BOT_APP_ID=
+BOT_APP_PASSWORD=
+AZURE_TENANT_ID=
+PINECONE_API_KEY=
+PINECONE_HOST=
+POSTGRES_HOST=
+POSTGRES_DB=
+POSTGRES_USER=
+POSTGRES_PASSWORD=
+```
+
+### 3) Run
 
 ```bash
-python app.py
-```
-
-The server starts on `http://localhost:8001`
-
----
-
-## Configuration
-
-### Environment Variables
-
-Create a `.env` file with the following variables:
-
-#### Required - OpenAI
-
-```env
-OPENAI_API_KEY=sk-your-openai-api-key
-OPENAI_MODEL=gpt-5
-REASONING_EFFORT=medium
-```
-
-#### Required - Azure Bot Service
-
-```env
-BOT_APP_ID=your-bot-app-id
-BOT_APP_PASSWORD=your-bot-app-password
-AZURE_TENANT_ID=your-azure-tenant-id
-```
-
-#### Required - Database
-
-```env
-POSTGRES_HOST=your-postgres-host
-POSTGRES_PORT=5432
-POSTGRES_DB=your-database-name
-POSTGRES_USER=your-username
-POSTGRES_PASSWORD=your-password
-```
-
-#### Required - Pinecone
-
-```env
-PINECONE_API_KEY=your-pinecone-api-key
-PINECONE_HOST=your-pinecone-host
-PINECONE_NAMESPACE=your-namespace
-```
-
-#### Optional - Redis
-
-```env
-REDIS_URL=redis://localhost:6379
-CONVERSATION_TTL_HOURS=24
-```
-
-#### Optional - Web Search
-
-```env
-TAVILY_API_KEY=your-tavily-api-key
-```
-
-#### Optional - Agent System
-
-```env
-USE_CUSTOM_RAG=true
-USE_AGENT_SYSTEM=true
-AGENT_VERBOSE=false
-AGENT_PARALLEL_EXECUTION=true
-```
-
----
-
-## Usage
-
-### Running Locally
-
-```bash
-# Start the server (port 8001)
+# Default: http://localhost:8001
 python app.py
 
-# Or use uvicorn directly (port 8000)
-uvicorn app:app --host 0.0.0.0 --port 8000
+# Or:
+uvicorn app:app --reload --port 8000
 ```
 
-### CLI Testing
+Notes:
+- `python app.py` listens on `8001` by default.
+- Docker/Cloud Run listen on `$PORT` (defaults to `8080` in the `Dockerfile`).
+
+### 4) Smoke-test without Teams
 
 ```bash
-# Interactive testing without Teams
 python cli_test.py
 ```
 
-### Health Check
+---
 
-```bash
-curl http://localhost:8000/health
+## Architecture (high-level)
+
+```text
+Microsoft Teams
+  |
+  v
+Bot Framework (Azure)
+  |  POST /api/messages
+  v
+FastAPI (app.py)
+  |
+  v
+Unified Agent (rag/unified_agent.py)
+  |-- execute_sql         -> PostgreSQL (geraete view)
+  |-- semantic_search     -> Pinecone (documents/machinery)
+  `-- web_search (opt.)   -> Tavily
 ```
 
-### Reset Conversations
+The unified agent does (typically) **one tool round** + **one answer round** to keep latency low while preserving accuracy.
 
-```bash
-# Reset all conversations
-curl -X POST http://localhost:8000/api/reset-conversation \
-  -H "Content-Type: application/json" \
-  -d "{}"
+---
 
-# Reset specific conversation
-curl -X POST http://localhost:8000/api/reset-conversation \
-  -H "Content-Type: application/json" \
-  -d '{"thread_key": "user123:conversation456"}'
-```
+## Conversation & follow-ups
 
-### Local Testing with Teams
+- Threads are isolated by `thread_key = "{user_id}:{conversation_id}"` (safe in group chats).
+- Redis stores conversation state with TTL (`CONVERSATION_TTL_HOURS`):
+  - `history:{thread_key}`: unified-agent chat history (for follow-ups)
+  - `conversation:{thread_key}`: Responses API continuity (fallback mode only)
 
-For local development, use [ngrok](https://ngrok.com) to expose your local server:
+**Reset**
+- In Teams: send `/reset` (or `/zuruecksetzen`)
+- Or via API: `POST /api/reset-conversation` with `{ "thread_key": "..." }` or `{}` for all
 
-```bash
-ngrok http 8000
-# Use the ngrok URL as your messaging endpoint in Azure Bot Service
+---
+
+## Configuration notes
+
+All config is via environment variables (`.env.example`).
+
+Useful toggles:
+
+```env
+# Use the internal RAG system (recommended)
+USE_CUSTOM_RAG=true
+USE_SINGLE_AGENT=true
+
+# Improve follow-up understanding + paraphrase retrieval
+UNIFIED_AGENT_ENABLE_QUERY_REWRITE=true
+UNIFIED_AGENT_MULTI_QUERY_RETRIEVAL=true
+UNIFIED_AGENT_MULTI_QUERY_MAX=3
 ```
 
 ---
 
-## API Reference
-
-### Endpoints
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/` | Health check - returns status |
-| `GET` | `/health` | Detailed health with model info, Redis status, and active conversation count |
-| `POST` | `/api/messages` | Bot Framework webhook for Teams messages |
-| `POST` | `/api/reset-conversation` | Reset conversation history |
-
-### Health Check Response
-
-```json
-{
-  "status": "healthy",
-  "model": "gpt-5",
-  "redis": "connected",
-  "active_conversations": 42
-}
-```
-
-### Reset Conversation Request
-
-```json
-{
-  "thread_key": "user123:conversation456"
-}
-```
-
-Or empty body `{}` to reset all conversations.
-
----
-
-## Deployment
-
-### Google Cloud Run (Recommended)
-
-1. **Build and deploy**
+## Deployment (Cloud Run)
 
 ```bash
 gcloud run deploy teams-bot \
   --source . \
-  --region=us-central1 \
+  --region us-central1 \
   --allow-unauthenticated
 ```
 
-2. **Set environment variables**
+Set environment variables (example):
 
 ```bash
 gcloud run services update teams-bot \
-  --set-env-vars="OPENAI_API_KEY=sk-xxx,OPENAI_MODEL=gpt-5,REASONING_EFFORT=medium"
+  --region us-central1 \
+  --set-env-vars="OPENAI_MODEL=gpt-5,REASONING_EFFORT=medium,USE_CUSTOM_RAG=true,USE_SINGLE_AGENT=true"
 ```
 
-### Docker
-
-1. **Build the image**
-
-```bash
-docker build -t teams-bot .
-```
-
-2. **Run locally**
-
-```bash
-docker run -p 8080:8080 --env-file .env teams-bot
-```
-
-### Azure App Service
-
-```bash
-# Deploy using the deployment script (Windows)
-deploy.bat
-
-# Or manual deployment
-az webapp deployment source config-zip \
-  --resource-group Teams \
-  --name rueko-teams-bot \
-  --src deploy.zip
-```
-
-### Configure Bot Messaging Endpoint
-
-1. Go to **Azure Portal** > **Bot Services** > Your Bot
-2. Navigate to **Settings** > **Configuration**
-3. Set **Messaging endpoint** to: `https://your-app-url/api/messages`
-4. Save the configuration
+> Recommended: store secrets in Secret Manager and reference them from Cloud Run instead of pasting keys into CLI history.
 
 ---
 
-## Project Structure
+## Testing
 
-```
-teams-bot/
-|-- app.py                    # Main FastAPI application
-|-- commands.py               # Bot command handlers
-|-- cli_test.py               # CLI testing tool
-|-- requirements.txt          # Python dependencies
-|-- Dockerfile                # Container configuration
-|-- .env                      # Environment variables (not committed)
-|
-|-- rag/                      # RAG and Agent System
-|   |-- __init__.py
-|   |-- config.py             # Configuration management
-|   |-- search.py             # RAG search coordinator
-|   |-- embeddings.py         # OpenAI embeddings
-|   |-- vector_store.py       # Pinecone integration
-|   |-- postgres.py           # PostgreSQL queries
-|   |-- chunker.py            # Document chunking
-|   |-- processor.py          # Document processing
-|   |-- feedback.py           # Feedback tracking
-|   |
-|   |-- agents/               # Multi-Agent System
-|       |-- __init__.py
-|       |-- base.py           # Base agent class and context
-|       |-- registry.py       # Agent registry with decorators
-|       |-- agent_system.py   # Main coordinator
-|       |-- orchestrator.py   # Query analysis and routing (GPT-5)
-|       |-- sql_agent.py      # SQL generation and execution
-|       |-- pinecone_agent.py # Semantic vector search
-|       |-- web_search_agent.py  # Tavily integration
-|       |-- reviewer_agent.py # Response synthesis
-|
-|-- scripts/                  # Utility scripts
-|   |-- index_documents.py    # Document indexing to Pinecone
-|   |-- index_machinery.py    # Equipment data indexing
-|
-|-- tests/                    # Test files
-    |-- simple_test.py
-    |-- debug_queries.py
-    |-- test_agent.py
+Most tests are **live-service** checks and require environment variables (`.env`) for OpenAI/Pinecone/Postgres (and optionally Redis).
+
+```bash
+python tests/test_agent.py
+python tests/simple_test.py -f tests/TEST_15_ESSENTIAL_QUESTIONS.txt
 ```
 
 ---
 
-## Contributing
+## Endpoints
 
-Contributions are welcome! Please follow these steps:
+| Method | Endpoint | Purpose |
+|---:|---|---|
+| `GET` | `/` | Liveness |
+| `GET` | `/health` | Health + Redis status |
+| `POST` | `/api/messages` | Teams webhook (Bot Framework) |
+| `POST` | `/api/reset-conversation` | Reset thread/all history |
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+---
 
-### Code Style
+## Repo layout
 
-- Follow PEP 8 guidelines
-- Use type hints
-- Write docstrings for public functions
-- Add tests for new features
+```text
+app.py                 FastAPI app + Teams webhook
+commands.py            Slash-command handlers (Teams)
+cli_test.py            Local interactive runner (no Teams)
+rag/                   Unified agent + retrieval + SQL tooling
+scripts/               Ingestion / indexing utilities
+tests/                 Live-service regression scripts (LLM-driven)
+```
+
+---
+
+## Security
+
+- Never commit secrets: keep `.env` local and use `.env.example` as a template.
+- Prefer Secret Manager for production credentials (Cloud Run).
 
 ---
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
----
-
-## Acknowledgments
-
-- [OpenAI](https://openai.com) for GPT models and Responses API
-- [FastAPI](https://fastapi.tiangolo.com) for the excellent web framework
-- [Pinecone](https://pinecone.io) for vector database services
-- [Microsoft Bot Framework](https://dev.botframework.com) for Teams integration
-- [Google Cloud](https://cloud.google.com) for Cloud Run hosting
-
----
-
-<p align="center">
-  Built with dedication for RUKO construction equipment management
-</p>
+MIT. See `LICENSE`.
