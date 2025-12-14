@@ -227,11 +227,17 @@ async def delete_conversation_id(request: Request, thread_key: str):
     r = await get_redis(request)
     if r:
         try:
-            await r.delete(f"conversation:{thread_key}")
+            # Clear both OpenAI Responses API continuity + unified-agent history.
+            await r.delete(f"conversation:{thread_key}", f"history:{thread_key}")
         except Exception as e:
             print(f"Redis delete error: {e}")
     # Also clear from memory
     conversation_responses.pop(thread_key, None)
+    if USE_CUSTOM_RAG and rag_search:
+        try:
+            await rag_search.clear_thread(thread_key)
+        except Exception as e:
+            print(f"[WARN] Failed to clear unified-agent thread state: {e}")
 
 
 async def clear_all_conversations(request: Request):
@@ -247,10 +253,24 @@ async def clear_all_conversations(request: Request):
                     await r.delete(*keys)
                 if cursor == 0:
                     break
+
+            # Also clear unified-agent history keys
+            cursor = 0
+            while True:
+                cursor, keys = await r.scan(cursor, match="history:*", count=100)
+                if keys:
+                    await r.delete(*keys)
+                if cursor == 0:
+                    break
         except Exception as e:
             print(f"Redis clear error: {e}")
     # Also clear in-memory
     conversation_responses.clear()
+    if USE_CUSTOM_RAG and rag_search:
+        try:
+            await rag_search.clear_all_threads()
+        except Exception as e:
+            print(f"[WARN] Failed to clear unified-agent thread cache: {e}")
 
 
 @app.get("/")
@@ -401,6 +421,18 @@ async def messages(request: Request):
                         from_bot=body.get("recipient"),
                         message=message
                     )
+
+                # Built-in reset command: clear both OpenAI continuity and unified-agent history.
+                cmd_word = user_message.strip().split()[0].lower()
+                if cmd_word in {"/reset", "/zurücksetzen", "/zuruecksetzen", "/zurucksetzen"}:
+                    thread_key = f"{user_id}:{conversation_id}"
+                    await delete_conversation_id(request, thread_key)
+                    await send_command_reply(
+                        body,
+                        "🔄 **Gesprächsverlauf zurückgesetzt.**\n\n"
+                        "Deine nächste Nachricht startet ohne Kontext aus dem bisherigen Verlauf.",
+                    )
+                    return Response(status_code=200)
 
                 # Route to command handler
                 await handle_command(body, user_message, send_command_reply)

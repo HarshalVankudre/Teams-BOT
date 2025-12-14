@@ -24,6 +24,10 @@ class RAGConfig:
     chunking_model: str = os.getenv("CHUNKING_MODEL", "gpt-4o-mini")
     chunking_reasoning: str = os.getenv("CHUNKING_REASONING", "none")
 
+    # Query Rewriting (conversation-aware retrieval; defaults to chunking model)
+    query_rewrite_model: str = os.getenv("QUERY_REWRITE_MODEL") or chunking_model
+    query_rewrite_reasoning: str = os.getenv("QUERY_REWRITE_REASONING") or chunking_reasoning
+
     # Embedding Model
     embedding_model: str = os.getenv("EMBEDDING_MODEL", "text-embedding-3-large")
     embedding_dimensions: int = 3072  # Full dimensions for text-embedding-3-large
@@ -53,6 +57,18 @@ class RAGConfig:
 
     # Conversation Settings
     conversation_ttl_hours: int = int(os.getenv("CONVERSATION_TTL_HOURS", "24"))
+
+    # Unified Agent Settings (behavior tuning)
+    unified_agent_max_tool_rounds: int = int(os.getenv("UNIFIED_AGENT_MAX_TOOL_ROUNDS", "2"))
+    unified_agent_retry_on_empty: bool = os.getenv("UNIFIED_AGENT_RETRY_ON_EMPTY", "true").lower() == "true"
+    unified_agent_default_sql_limit: int = int(os.getenv("UNIFIED_AGENT_DEFAULT_SQL_LIMIT", "200"))
+    unified_agent_additional_instructions: str = os.getenv("UNIFIED_AGENT_ADDITIONAL_INSTRUCTIONS", "")
+    unified_agent_force_internal_first: bool = os.getenv("UNIFIED_AGENT_FORCE_INTERNAL_FIRST", "true").lower() == "true"
+    unified_agent_max_answer_words: int = int(os.getenv("UNIFIED_AGENT_MAX_ANSWER_WORDS", "120"))
+    unified_agent_enable_query_rewrite: bool = os.getenv("UNIFIED_AGENT_ENABLE_QUERY_REWRITE", "true").lower() == "true"
+    unified_agent_multi_query_retrieval: bool = os.getenv("UNIFIED_AGENT_MULTI_QUERY_RETRIEVAL", "true").lower() == "true"
+    unified_agent_multi_query_max: int = int(os.getenv("UNIFIED_AGENT_MULTI_QUERY_MAX", "3"))
+    unified_agent_rewrite_history_turns: int = int(os.getenv("UNIFIED_AGENT_REWRITE_HISTORY_TURNS", "8"))
 
     def validate(self):
         """Validate required configuration"""

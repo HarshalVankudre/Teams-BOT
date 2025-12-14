@@ -2,6 +2,7 @@
 from typing import List, Dict, Any, Optional
 from openai import AsyncOpenAI
 import pinecone
+import re
 
 from .config import config
 from .unified_agent import UnifiedAgent
@@ -13,7 +14,7 @@ def model_supports_reasoning(model_name: str) -> bool:
     if not model_name:
         return False
     model_lower = model_name.lower()
-    return model_lower.startswith('o1') or model_lower.startswith('o3')
+    return model_lower.startswith('o1') or model_lower.startswith('o3') or model_lower.startswith('gpt-5')
 
 
 # Import embeddings for fallback
@@ -60,6 +61,31 @@ class RAGSearch:
         else:
             print("[RAG] Unified Agent: Disabled (will use direct search fallback)")
 
+    async def clear_thread(self, thread_key: str) -> None:
+        """Clear conversation state for a specific thread (unified agent only)."""
+        if self.unified_agent and thread_key:
+            await self.unified_agent.clear_thread(thread_key)
+
+    async def clear_all_threads(self) -> None:
+        """Clear conversation state for all threads (unified agent only)."""
+        if self.unified_agent:
+            await self.unified_agent.clear_all_threads()
+
+    @staticmethod
+    def _parse_verbose_flag(query: str) -> tuple[str, bool]:
+        """Detect trailing verbosity flags and strip them from the user query."""
+        if not query:
+            return "", False
+
+        # Accept both German and ASCII variants.
+        pattern = re.compile(r"\s+(--verbose|--ausführlich|--ausfuhrlich)\s*$", flags=re.IGNORECASE)
+        match = pattern.search(query)
+        if not match:
+            return query, False
+
+        stripped = query[: match.start()].rstrip()
+        return stripped, True
+
     async def search_and_generate(
         self,
         query: str,
@@ -87,6 +113,7 @@ class RAGSearch:
         Returns:
             Dict with response, sources, and metadata
         """
+        query, verbose_requested = self._parse_verbose_flag(query)
         top_k = top_k or config.search_top_k
 
         # PRIMARY: Unified single agent
@@ -96,7 +123,9 @@ class RAGSearch:
                     query=query,
                     user_id=user_id,
                     user_name=user_name,
-                    thread_key=thread_key
+                    thread_key=thread_key,
+                    system_instructions=system_instructions,
+                    verbose=verbose_requested,
                 )
                 print(f"[RAG] Unified agent response in {result.get('execution_time_ms', 0)}ms")
                 return result
@@ -109,7 +138,8 @@ class RAGSearch:
             top_k=top_k,
             filters=filters,
             system_instructions=system_instructions,
-            previous_response_id=previous_response_id
+            previous_response_id=previous_response_id,
+            verbose=verbose_requested,
         )
 
     async def _fallback_search(
@@ -118,7 +148,8 @@ class RAGSearch:
         top_k: int,
         filters: Optional[Dict[str, Any]],
         system_instructions: Optional[str],
-        previous_response_id: Optional[str]
+        previous_response_id: Optional[str],
+        verbose: bool = False,
     ) -> Dict[str, Any]:
         """Fallback to direct Pinecone search without agent system"""
         print("[RAG] Using fallback direct search...")
@@ -148,19 +179,41 @@ Frage: {query}"""}
             }
 
             # Add reasoning for supported models
-            if (self.reasoning_effort and
-                self.reasoning_effort.lower() != "none" and
-                model_supports_reasoning(self.model)):
+            if self.reasoning_effort and self.reasoning_effort.lower() != "none":
                 response_params["reasoning"] = {"effort": self.reasoning_effort}
 
             if previous_response_id:
                 response_params["previous_response_id"] = previous_response_id
                 response_params["store"] = True
 
-            response = await self.client.responses.create(**response_params)
+            try:
+                response = await self.client.responses.create(**response_params)
+            except Exception as e:
+                # Retry without reasoning if the model/endpoint rejects it
+                if "reasoning" in str(e).lower() and "reasoning" in response_params:
+                    response_params.pop("reasoning", None)
+                    response = await self.client.responses.create(**response_params)
+                else:
+                    raise
+
+            response_text = response.output_text
+            if verbose:
+                meta_lines = [
+                    "Verbose: Ausfuehrungsprotokoll (keine internen Gedanken).",
+                    "Mode: fallback (direct Pinecone + Responses API)",
+                    f"Model: {self.model}",
+                    f"Reasoning Effort: {self.reasoning_effort}",
+                    f"TopK: {top_k}",
+                    f"Sources: {len(all_sources)}",
+                ]
+                response_text = (
+                    (response_text or "").rstrip()
+                    + "\n\n---\n"
+                    + "\n".join([f"*{l}*" for l in meta_lines])
+                )
 
             return {
-                "response": response.output_text,
+                "response": response_text,
                 "sources": all_sources,
                 "chunks_used": len(search_results),
                 "response_id": response.id,
