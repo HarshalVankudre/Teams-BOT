@@ -4,6 +4,22 @@ PostgreSQL Database Schema for RUKO Equipment Database
 This is the SINGLE SOURCE OF TRUTH for the database schema.
 All agents and services should import from here.
 
+NEW (2025-12-12):
+- Scripts now load the raw SEMA export into three tables and a view:
+  * equipment (core rows)
+  * property_def (catalog of E#### codes -> prop_* keys)
+  * equipment_property (property instances with typed values)
+  * VIEW geraete (flattened prop_* columns + JSONB eigenschaften)
+- To refresh from sema_data_export.json: python scripts/load_sema_export.py
+- Code/Name convenience in VIEW "geraete":
+  * hersteller / hersteller_code / hersteller_name / hersteller_full ("CODE - Name")
+  * geraetegruppe / geraetegruppe_code / geraetegruppe_name / geraetegruppe_full
+  * verwendung / verwendung_code / verwendung_name / verwendung_full
+  * kostenstelle / kostenstelle_code / kostenstelle_name / kostenstelle_full
+  * abrechnungsgruppe / abrechnungsgruppe_code / abrechnungsgruppe_name / abrechnungsgruppe_full
+- ASCII-normalized search helpers (strip spaces/punct, umlauts -> ae/oe/ue/ss):
+  * hersteller_search, bezeichnung_search, geraetegruppe_search
+
 Table: geraete (Baumaschinen/Construction Equipment)
 Total Records: ~2395
 
@@ -332,16 +348,20 @@ DATENBANK-SCHEMA: Tabelle "geraete" (Baumaschinen)
 DIREKTE SPALTEN:
 - id: BIGINT Primary Key (SEMA primaryKey)
 - bezeichnung: Modellname (z.B. "CAT 320", "BW 174 AP-5 AM")
-- hersteller: z.B. 'Caterpillar', 'Liebherr', 'Bomag'
+- hersteller: z.B. 'Caterpillar', 'Liebherr', 'Bomag' (teilweise auch 'CODE - Name')
+- hersteller_code / hersteller_name / hersteller_full sind verfuegbar (CODE/Name Convenience)
 - geraetegruppe: WICHTIGSTE SPALTE! z.B. 'Mobilbagger', 'Tandemwalze'
 - kategorie: Oberkategorie (oft NULL - geraetegruppe bevorzugen!)
-- verwendung: 'Vermietung', 'Verkauf', 'Fuhrpark'
+- verwendung: oft im Format 'CODE - Name' (z.B. 'MIET - Vermietung'); zusaetzlich verwendung_code / verwendung_name / verwendung_full
 - seriennummer, inventarnummer
+- *_search Spalten: hersteller_search, bezeichnung_search, geraetegruppe_search (ASCII-normalisiert, fuer robuste Suche)
+- nuclos_state / nuclos_process: Status/Prozess aus Nuclos (die einzigen status-aehnlichen Felder in der View; es gibt kein separates 'status' Feld).
 
 PROPERTY SPALTEN (prop_*) - 171 Spalten fuer alle Eigenschaften:
 - prop_breite, prop_hoehe, prop_laenge, prop_gewicht (mit Einheit, z.B. "1400 mm")
 - prop_motor_leistung (z.B. "129 kW")
 - prop_klimaanlage, prop_oszillation (Werte: "Ja" oder "Nein")
+- Einbau-/Arbeitsbreiten (z.B. Asphaltfertiger): prop_einbaubreite_grundbohle, prop_einbaubreite_max, prop_einbaubreite_mit_verbreiterungen, prop_arbeitsbreite, prop_bohle
 - prop_abgasstufe_eu, prop_motor_hersteller (Text)
 - ... und 160+ weitere prop_ Spalten
 
@@ -349,6 +369,7 @@ WICHTIG:
 - prop_ Spalten sind TEXT mit Einheit (z.B. "1400 mm", "Ja")
 - Boolean-Abfragen: prop_klimaanlage = 'Ja' (nicht true!)
 - Bevorzuge prop_ Spalten statt JSONB!
+- Verwende nur existierende prop_* Spalten (z.B. es gibt KEIN prop_einbaubreite oder prop_max_einbaubreite).
 
 BEISPIEL-ANFRAGEN:
 - "Liebherr Maschinen" -> hersteller = 'Liebherr'
@@ -357,6 +378,47 @@ BEISPIEL-ANFRAGEN:
 - "Mit Klimaanlage" -> prop_klimaanlage = 'Ja'
 - "Walzen mit Oszillation" -> prop_oszillation = 'Ja'
 """
+
+# Columns that exist in the geraete VIEW (non-prop_* base columns).
+# Keep this aligned with scripts/load_sema_export.py:create_view.
+GERAETE_VIEW_BASE_COLUMNS = [
+    "id",
+    "bezeichnung",
+    "bezeichnung_search",
+    "hersteller",
+    "hersteller_orig",
+    "hersteller_code",
+    "hersteller_name",
+    "hersteller_full",
+    "hersteller_search",
+    "geraetegruppe",
+    "geraetegruppe_code",
+    "geraetegruppe_name",
+    "geraetegruppe_full",
+    "geraetegruppe_search",
+    "verwendung",
+    "verwendung_code",
+    "verwendung_name",
+    "verwendung_full",
+    "kostenstelle",
+    "kostenstelle_code",
+    "kostenstelle_name",
+    "kostenstelle_full",
+    "abrechnungsgruppe",
+    "abrechnungsgruppe_code",
+    "abrechnungsgruppe_name",
+    "abrechnungsgruppe_full",
+    "kategorie",
+    "seriennummer",
+    "inventarnummer",
+    "nuclos_state",
+    "nuclos_process",
+    "eigenschaften",
+    "gewicht_kg",
+    "motor_leistung_kw",
+    "klimaanlage",
+    "zentralschmierung",
+]
 
 # =============================================================================
 # VALUE LISTS (from actual database)
@@ -435,6 +497,7 @@ CODE_NAME_FORMAT_COLUMNS = {
     'kostenstelle': ['100 - Handel', '200 - Mietpark', '90000 - Fuhrpark'],
     'abrechnungsgruppe': ['4.3030.010 - Bohlenverbreiterungen...'],
     'hersteller': ['VOeG - Voegele', '??? - Sonstige'],  # Partial - most are simple names
+    'verwendung': ['MIET - Vermietung', 'VK - Verkauf', 'FP - Fuhrpark', 'EXG - Externes Geraet'],
 }
 
 # SQL Agent rules for CODE-Name format (imported by sql_agent.py)
@@ -444,27 +507,31 @@ Diese Spalten haben Format 'CODE - Name' (z.B. '200 - Mietpark'):
 - kostenstelle: '100 - Handel', '200 - Mietpark', '90000 - Fuhrpark'
 - abrechnungsgruppe: '4.3030.010 - Beschreibung'
 - hersteller (teilweise): 'VOeG - Voegele'
+- verwendung: 'MIET - Vermietung', 'VK - Verkauf', 'FP - Fuhrpark', 'EXG - Externes Geraet'
 
 Bei Suche nach Code/Nummer IMMER ILIKE verwenden:
 - FALSCH: WHERE kostenstelle = '200' (findet NICHTS!)
 - RICHTIG: WHERE kostenstelle ILIKE '200%' (findet '200 - Mietpark')
 - FALSCH: WHERE kostenstelle = '200-' (findet NICHTS!)
 - RICHTIG: WHERE kostenstelle ILIKE '200 -%' (findet '200 - Mietpark')
+
+Bei verwendung IMMER code/name-aware filtern:
+- FALSCH: WHERE verwendung = 'Vermietung' (findet NICHTS!)
+- RICHTIG: WHERE verwendung_code = 'MIET' ODER verwendung_name ILIKE 'Vermietung%' ODER verwendung ILIKE 'Vermietung%'
+- GLEICHES fuer Verkauf/Fuhrpark/EXG mit Codes VK/FP/EXG
 """
 
 # German umlaut handling rules for SQL agent
 SQL_UMLAUT_RULES = """
 DEUTSCHE UMLAUTE:
-Die Datenbank verwendet ASCII-Ersetzungen fuer Umlaute:
-- ae statt ae (z.B. 'Kaltfraese', 'Geraet')
-- oe statt oe (z.B. 'Voegele', 'Loeffel')
-- ue statt ue (z.B. 'Muell', 'Gruenig')
-- ss statt ss (z.B. 'Strasse')
+Die View stellt zusaetzliche *_search Spalten bereit (ASCII, kleingeschrieben, ohne Leerzeichen/Punkte):
+- hersteller_search, bezeichnung_search, geraetegruppe_search
+Umlaut-Ersetzungen: ae statt ä, oe statt ö, ue statt ü, ss statt ß.
 
 BEISPIELE:
 - Voegele Maschinen: WHERE hersteller ILIKE '%voegele%' (283 Treffer)
-- Fraesen: WHERE geraetegruppe ILIKE '%fraese%' (156 Treffer)
-- Loeffel: WHERE geraetegruppe ILIKE '%loeffel%' (345 Treffer)
+- Fraesen: WHERE geraetegruppe_search ILIKE '%fraese%'
+- Loeffel: WHERE geraetegruppe_search ILIKE '%loeffel%'
 - Geraete: WHERE geraetegruppe ILIKE '%geraet%'
 """
 
@@ -527,24 +594,7 @@ PROPERTY_COLUMNS = [
     'prop_zul_reisskraft'
 ]
 
-# =============================================================================
-# DEPRECATED: Legacy references (eigenschaften column has been removed)
-# =============================================================================
-# The following are kept for reference only. Use prop_* columns instead!
-# Map: Old JSONB key -> New prop_ column
-LEGACY_PROPERTY_MAPPING = {
-    'Klimaanlage': 'prop_klimaanlage',
-    'Zentralschmierung': 'prop_zentralschmierung',
-    'Hammerhydraulik': 'prop_hammerhydraulik',
-    'Oszillation': 'prop_oszillation',
-    'Gewicht [kg]': 'prop_gewicht',
-    'Breite [mm]': 'prop_breite',
-    'Hoehe [mm]': 'prop_hoehe',
-    'Motor - Leistung [kW]': 'prop_motor_leistung',
-    'Arbeitsbreite [mm]': 'prop_arbeitsbreite',
-    'Abgasstufe EU': 'prop_abgasstufe_eu',
-    'Motor - Hersteller': 'prop_motor_hersteller',
-}
+
 
 # Base columns (not from JSONB, still in use)
 BOOLEAN_FIELDS = ['klimaanlage', 'zentralschmierung']
