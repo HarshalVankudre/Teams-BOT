@@ -1,12 +1,13 @@
 """
 PostgreSQL Service for Hybrid RAG
-Handles structured queries to the SEMA equipment database on GCP Cloud SQL.
+Handles structured queries to the SEMA Matrix equipment database (sema_matrix).
 """
 import os
 import re
-import json
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Sequence, Mapping, Union, Tuple
 from dataclasses import dataclass
+
+_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 try:
     import psycopg2
@@ -22,11 +23,59 @@ from .schema import DATABASE_SCHEMA
 @dataclass
 class PostgresConfig:
     """PostgreSQL configuration from environment"""
-    host: str = os.getenv("POSTGRES_HOST", "localhost")
-    port: str = os.getenv("POSTGRES_PORT", "5432")
-    database: str = os.getenv("POSTGRES_DB", "sema")
-    user: str = os.getenv("POSTGRES_USER", "postgres")
-    password: str = os.getenv("POSTGRES_PASSWORD", "")
+    host: str
+    port: str
+    database: str
+    user: str
+    password: str
+    schema: str
+    equipment_table: str
+
+    @classmethod
+    def from_env(cls) -> "PostgresConfig":
+        return cls(
+            host=os.getenv("POSTGRES_HOST", ""),
+            port=os.getenv("POSTGRES_PORT", ""),
+            database=os.getenv("POSTGRES_DB", ""),
+            user=os.getenv("POSTGRES_USER", ""),
+            password=os.getenv("POSTGRES_PASSWORD", ""),
+            schema=os.getenv("POSTGRES_SCHEMA", ""),
+            equipment_table=os.getenv("POSTGRES_EQUIPMENT_TABLE", ""),
+        )
+
+    def validate(self) -> Optional[str]:
+        missing = []
+        if not self.host:
+            missing.append("POSTGRES_HOST")
+        if not self.port:
+            missing.append("POSTGRES_PORT")
+        if not self.database:
+            missing.append("POSTGRES_DB")
+        if not self.user:
+            missing.append("POSTGRES_USER")
+        if not self.password:
+            missing.append("POSTGRES_PASSWORD")
+        if not self.schema:
+            missing.append("POSTGRES_SCHEMA")
+        if not self.equipment_table:
+            missing.append("POSTGRES_EQUIPMENT_TABLE")
+
+        if missing:
+            return f"Missing required Postgres env vars: {', '.join(missing)}"
+
+        if not str(self.port).isdigit():
+            return "Invalid POSTGRES_PORT (must be numeric)"
+
+        if not _IDENTIFIER_RE.fullmatch(self.schema):
+            return "Invalid POSTGRES_SCHEMA (must be a simple identifier)"
+        if not _IDENTIFIER_RE.fullmatch(self.equipment_table):
+            return "Invalid POSTGRES_EQUIPMENT_TABLE (must be a simple identifier)"
+
+        return None
+
+    def equipment_table_fqn(self) -> str:
+        """Fully-qualified equipment table name (validated identifiers)."""
+        return f"{self.schema}.{self.equipment_table}"
 
     def to_dict(self) -> Dict[str, str]:
         return {
@@ -41,63 +90,184 @@ class PostgresConfig:
 class PostgresService:
     """
     PostgreSQL service for structured equipment queries.
-    Executes SQL queries against the SEMA database.
+    Executes SQL queries against the SEMA Matrix schema (sema_matrix).
     """
 
     # Schema information imported from centralized schema.py
     SCHEMA_INFO = DATABASE_SCHEMA
 
+    _READONLY_START_RE = re.compile(r"^(SELECT|WITH)\b", re.IGNORECASE)
+    _DANGEROUS_KEYWORDS_RE = re.compile(
+        r"\b(DROP|DELETE|UPDATE|INSERT|ALTER|TRUNCATE|CREATE|GRANT|REVOKE)\b",
+        re.IGNORECASE,
+    )
+
+    @staticmethod
+    def _strip_leading_sql_comments(sql: str) -> str:
+        """Remove leading SQL comments to make start-token validation reliable."""
+        s = sql.lstrip()
+        while True:
+            if s.startswith("--"):
+                newline_index = s.find("\n")
+                if newline_index == -1:
+                    return ""
+                s = s[newline_index + 1 :].lstrip()
+                continue
+            if s.startswith("/*"):
+                end_index = s.find("*/")
+                if end_index == -1:
+                    return ""
+                s = s[end_index + 2 :].lstrip()
+                continue
+            return s
+
+    @classmethod
+    def prepare_readonly_sql(
+        cls,
+        sql: str,
+        *,
+        default_limit: int = 10000,
+    ) -> Tuple[Optional[str], Optional[str]]:
+        """
+        Validate and normalize readonly SQL (SELECT/CTE-only).
+
+        Returns:
+            (prepared_sql, error). If error is not None, prepared_sql will be None.
+        """
+        if not sql or not sql.strip():
+            return None, "Empty SQL"
+
+        sql = sql.strip()
+
+        # Block multiple statements (allow a single trailing ';').
+        if ";" in sql.rstrip(";"):
+            return None, "Multiple statements are not allowed"
+
+        # Normalize trailing semicolons.
+        sql = sql.rstrip(";").strip()
+
+        # Validate start token (ignore leading comments and optional parentheses).
+        sql_for_checks = cls._strip_leading_sql_comments(sql)
+        sql_start = sql_for_checks.lstrip().lstrip("(").lstrip()
+        if not cls._READONLY_START_RE.match(sql_start):
+            return None, "Only SELECT queries are allowed"
+
+        # Block dangerous keywords (word-boundary match to avoid false positives like updated_at).
+        match = cls._DANGEROUS_KEYWORDS_RE.search(sql_for_checks)
+        if match:
+            return None, f"Dangerous keyword '{match.group(1).upper()}' not allowed"
+
+        # Basic truncation/format sanity check.
+        if sql.count("(") != sql.count(")"):
+            return None, "Malformed SQL: unbalanced parentheses"
+
+        # Add a safety LIMIT if none specified (unless UNION is used).
+        sql_upper = sql_for_checks.upper()
+        is_union_query = "UNION" in sql_upper
+        if "LIMIT" not in sql_upper and not is_union_query:
+            sql = f"{sql} LIMIT {default_limit}"
+
+        return sql, None
+
     def __init__(self, config: Optional[PostgresConfig] = None):
-        self.config = config or PostgresConfig()
-        self.available = POSTGRES_AVAILABLE and bool(self.config.password)
+        self.config = config or PostgresConfig.from_env()
+        config_error = self.config.validate()
+        self.config_error = config_error
+        self.equipment_table = self.config.equipment_table_fqn() if not config_error else None
+        self.available = POSTGRES_AVAILABLE and (config_error is None)
+        self.availability_error: Optional[str] = None
+        self._column_cache: Optional[Dict[str, str]] = None
 
         if self.available:
             # Test connection
             try:
                 conn = self._get_connection()
                 cursor = conn.cursor()
-                cursor.execute("SELECT COUNT(*) FROM geraete")
+                cursor.execute(f"SELECT COUNT(*) FROM {self.equipment_table}")
                 count = cursor.fetchone()[0]
                 cursor.close()
                 conn.close()
-                print(f"[PostgreSQL] Connected to {self.config.host}, {count} equipment records")
+                print(
+                    f"[PostgreSQL] Connected to {self.config.host}/{self.config.database}, "
+                    f"{count} equipment records ({self.equipment_table})"
+                )
             except Exception as e:
                 print(f"[PostgreSQL] Connection failed: {e}")
+                self.availability_error = f"Connection failed: {e}"
                 self.available = False
         else:
-            print("[PostgreSQL] Service not available (missing credentials or psycopg2)")
+            reason = config_error or "psycopg2 not installed"
+            print(f"[PostgreSQL] Service not available ({reason})")
+            self.availability_error = reason
 
     def _get_connection(self):
         """Get database connection"""
         return psycopg2.connect(**self.config.to_dict())
 
-    def execute_query(self, sql: str) -> List[Dict[str, Any]]:
+    def execute_query(
+        self,
+        sql: str,
+        params: Optional[Union[Sequence[Any], Mapping[str, Any]]] = None,
+        *,
+        raise_on_error: bool = False,
+    ) -> List[Dict[str, Any]]:
         """
         Execute SQL query and return results as list of dicts.
 
         Args:
             sql: SQL query to execute
+            params: Optional query parameters (recommended for non-LLM queries)
 
         Returns:
             List of result dictionaries
         """
         if not self.available:
+            if raise_on_error:
+                raise RuntimeError(self.availability_error or "PostgreSQL unavailable")
             return []
 
         conn = self._get_connection()
         cursor = conn.cursor(cursor_factory=RealDictCursor)
 
         try:
-            cursor.execute(sql)
+            cursor.execute(sql, params)
             results = [self._convert_row(dict(row)) for row in cursor.fetchall()]
             return results
         except Exception as e:
             print(f"[PostgreSQL] Query error: {e}")
             print(f"[PostgreSQL] SQL: {sql[:200]}...")
+            if raise_on_error:
+                raise
             return []
         finally:
             cursor.close()
             conn.close()
+
+    def get_column_info(self, refresh: bool = False) -> Dict[str, str]:
+        """Fetch column metadata for the equipment table."""
+        if not self.available:
+            return {}
+        if self._column_cache is not None and not refresh:
+            return self._column_cache
+
+        sql = """
+            SELECT column_name, data_type
+            FROM information_schema.columns
+            WHERE table_schema = %s AND table_name = %s
+            ORDER BY ordinal_position
+        """
+        try:
+            rows = self.execute_query(sql, (self.config.schema, self.config.equipment_table))
+        except Exception as e:
+            print(f"[PostgreSQL] Column lookup failed: {e}")
+            return {}
+
+        self._column_cache = {
+            row.get("column_name"): row.get("data_type")
+            for row in rows
+            if row.get("column_name")
+        }
+        return self._column_cache
 
     def _convert_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
         """Convert Decimal and other non-JSON-serializable types to native Python types"""
@@ -112,24 +282,35 @@ class PostgresService:
         category: Optional[str] = None,
         manufacturer: Optional[str] = None
     ) -> int:
-        """Get count of equipment matching criteria"""
-        sql = "SELECT COUNT(*) as count FROM geraete WHERE 1=1"
+        """
+        Get count of equipment matching criteria.
+        """
+        sql = f"""
+            SELECT COUNT(*) AS count
+            FROM {self.equipment_table}
+            WHERE 1=1
+        """
+        params: List[Any] = []
 
         if category:
-            sql += f" AND kategorie ILIKE '%{category}%'"
+            sql += " AND (geraetegruppe_name ILIKE %s OR geraetegruppe_code ILIKE %s)"
+            params.append(f"%{category}%")
+            params.append(f"%{category}%")
         if manufacturer:
-            sql += f" AND hersteller ILIKE '%{manufacturer}%'"
+            sql += " AND (hersteller_name ILIKE %s OR hersteller_code ILIKE %s)"
+            params.append(f"%{manufacturer}%")
+            params.append(f"%{manufacturer}%")
 
-        results = self.execute_query(sql)
+        results = self.execute_query(sql, params)
         return results[0]["count"] if results else 0
 
     def get_equipment_by_category(self) -> List[Dict[str, Any]]:
-        """Get equipment counts by category"""
-        sql = """
-            SELECT kategorie, COUNT(*) as count
-            FROM geraete
-            WHERE kategorie IS NOT NULL
-            GROUP BY kategorie
+        """Get equipment counts by geraetegruppe_name (legacy method name)."""
+        sql = f"""
+            SELECT geraetegruppe_name AS equipment_group, COUNT(*) AS count
+            FROM {self.equipment_table}
+            WHERE geraetegruppe_name IS NOT NULL
+            GROUP BY geraetegruppe_name
             ORDER BY count DESC
         """
         return self.execute_query(sql)
@@ -137,71 +318,88 @@ class PostgresService:
     def get_equipment_by_manufacturer(self, limit: int = 10) -> List[Dict[str, Any]]:
         """Get equipment counts by manufacturer"""
         sql = f"""
-            SELECT hersteller, COUNT(*) as count
-            FROM geraete
-            WHERE hersteller IS NOT NULL
-            GROUP BY hersteller
+            SELECT hersteller_name AS manufacturer, COUNT(*) AS count
+            FROM {self.equipment_table}
+            WHERE hersteller_name IS NOT NULL
+            GROUP BY hersteller_name
             ORDER BY count DESC
-            LIMIT {limit}
+            LIMIT %s
         """
-        return self.execute_query(sql)
+        return self.execute_query(sql, (limit,))
 
     def search_equipment(
         self,
         category: Optional[str] = None,
         manufacturer: Optional[str] = None,
-        features: Optional[Dict[str, bool]] = None,
+        features: Optional[Dict[str, Any]] = None,
         limit: int = 20
     ) -> List[Dict[str, Any]]:
         """
         Search equipment with filters.
 
         Args:
-            category: Filter by category
+            category: Filter by equipment_group (legacy name)
             manufacturer: Filter by manufacturer
-            features: Boolean features to filter (e.g., {"klimaanlage": True})
+            features: Property filters by name (e.g., {"Klimaanlage": True} or {"Gewicht": "2000"})
             limit: Max results
 
         Returns:
             List of matching equipment
         """
-        sql = """
-            SELECT
-                id, bezeichnung, hersteller, kategorie, geraetegruppe,
-                seriennummer, inventarnummer, verwendung,
-                eigenschaften_json->>'gewicht_kg' as gewicht_kg,
-                eigenschaften_json->>'motor_leistung_kw' as motor_leistung_kw,
-                eigenschaften_json->>'arbeitsbreite_mm' as arbeitsbreite_mm,
-                eigenschaften_json->>'klimaanlage' as klimaanlage,
-                eigenschaften_json->>'motor_hersteller' as motor_hersteller,
-                eigenschaften_json->>'abgasstufe_eu' as abgasstufe_eu
-            FROM geraete
-            WHERE 1=1
-        """
-
-        if category:
-            sql += f" AND (kategorie ILIKE '%{category}%' OR geraetegruppe ILIKE '%{category}%')"
-        if manufacturer:
-            sql += f" AND hersteller ILIKE '%{manufacturer}%'"
-        if features:
-            for feature, value in features.items():
-                sql += f" AND (eigenschaften_json->>'{feature}')::boolean = {str(value).lower()}"
-
-        sql += f" ORDER BY hersteller, bezeichnung LIMIT {limit}"
-
-        return self.execute_query(sql)
-
-    def get_equipment_by_id(self, equipment_id: str) -> Optional[Dict[str, Any]]:
-        """Get single equipment by ID with all properties"""
         sql = f"""
             SELECT
-                id, bezeichnung, hersteller, kategorie, geraetegruppe,
-                seriennummer, inventarnummer, verwendung,
-                inhalt, titel, eigenschaften_json
-            FROM geraete
-            WHERE id = '{equipment_id}'
+                id,
+                bezeichnung,
+                hersteller_name,
+                hersteller_code,
+                geraetegruppe_name,
+                geraetegruppe_code,
+                verwendung_code,
+                verwendung_name,
+                seriennummer,
+                inventarnummer,
+                nuclos_state,
+                nuclos_process,
+                prop_gewicht,
+                prop_motor_leistung,
+                prop_klimaanlage
+            FROM {self.equipment_table}
+            WHERE 1=1
         """
-        results = self.execute_query(sql)
+        params: List[Any] = []
+
+        if category:
+            sql += " AND (geraetegruppe_name ILIKE %s OR geraetegruppe_code ILIKE %s)"
+            params.append(f"%{category}%")
+            params.append(f"%{category}%")
+        if manufacturer:
+            sql += " AND (hersteller_name ILIKE %s OR hersteller_code ILIKE %s)"
+            params.append(f"%{manufacturer}%")
+            params.append(f"%{manufacturer}%")
+
+        if features:
+            for feature, desired in features.items():
+                col_name = feature if str(feature).startswith("prop_") else f"prop_{feature}"
+                if not re.fullmatch(r"[a-zA-Z0-9_]+", col_name or ""):
+                    continue
+                if isinstance(desired, bool) or desired is None:
+                    sql += f" AND {col_name} = %s"
+                    params.append(desired)
+                else:
+                    sql += f" AND CAST({col_name} AS TEXT) ILIKE %s"
+                    params.append(f"%{desired}%")
+
+        sql += " ORDER BY hersteller_name, bezeichnung LIMIT %s"
+        params.append(limit)
+
+        return self.execute_query(sql, params)
+
+    def get_equipment_by_id(self, equipment_id: str) -> Optional[Dict[str, Any]]:
+        """Get single equipment row by id."""
+        results = self.execute_query(
+            f"SELECT * FROM {self.equipment_table} WHERE id = %s",
+            (equipment_id,),
+        )
         return results[0] if results else None
 
     def search_by_serial_or_inventory(
@@ -209,26 +407,42 @@ class PostgresService:
         serial_number: Optional[str] = None,
         inventory_number: Optional[str] = None
     ) -> List[Dict[str, Any]]:
-        """Search by serial or inventory number"""
-        conditions = []
-        if serial_number:
-            conditions.append(f"seriennummer ILIKE '%{serial_number}%'")
-        if inventory_number:
-            conditions.append(f"inventarnummer ILIKE '%{inventory_number}%'")
+        """Search by serial or inventory number."""
+        clauses: List[str] = []
+        params: List[Any] = []
 
-        if not conditions:
+        if serial_number:
+            clauses.append("seriennummer ILIKE %s")
+            params.append(f"%{serial_number}%")
+        if inventory_number:
+            clauses.append("inventarnummer ILIKE %s")
+            params.append(f"%{inventory_number}%")
+
+        if not clauses:
             return []
 
         sql = f"""
             SELECT
-                id, bezeichnung, hersteller, kategorie, geraetegruppe,
-                seriennummer, inventarnummer, verwendung,
-                eigenschaften_json
-            FROM geraete
-            WHERE {' OR '.join(conditions)}
+                id,
+                bezeichnung,
+                hersteller_name,
+                hersteller_code,
+                geraetegruppe_name,
+                geraetegruppe_code,
+                verwendung_code,
+                verwendung_name,
+                seriennummer,
+                inventarnummer,
+                nuclos_state,
+                nuclos_process,
+                prop_gewicht,
+                prop_motor_leistung,
+                prop_klimaanlage
+            FROM {self.equipment_table}
+            WHERE {" OR ".join(clauses)}
             LIMIT 10
         """
-        return self.execute_query(sql)
+        return self.execute_query(sql, params)
 
     def get_statistics(self) -> Dict[str, Any]:
         """Get overall database statistics"""
@@ -240,7 +454,7 @@ class PostgresService:
         }
 
         # Total count
-        total = self.execute_query("SELECT COUNT(*) as count FROM geraete")
+        total = self.execute_query(f"SELECT COUNT(*) as count FROM {self.equipment_table}")
         stats["total_count"] = total[0]["count"] if total else 0
 
         # By category
@@ -250,29 +464,37 @@ class PostgresService:
         stats["by_manufacturer"] = self.get_equipment_by_manufacturer(5)
 
         # By usage
-        usage = self.execute_query("""
-            SELECT verwendung, COUNT(*) as count
-            FROM geraete
-            WHERE verwendung IS NOT NULL
-            GROUP BY verwendung
+        usage = self.execute_query(
+            f"""
+            SELECT verwendung_code, verwendung_name, COUNT(*) AS count
+            FROM {self.equipment_table}
+            WHERE verwendung_code IS NOT NULL
+            GROUP BY verwendung_code, verwendung_name
             ORDER BY count DESC
-        """)
+            """
+        )
         stats["by_usage"] = usage
 
         return stats
 
     def search_by_use_case(self, use_case: str, limit: int = 10) -> List[Dict[str, Any]]:
-        """Search equipment by use case (einsatzgebiete array)"""
+        """Search equipment by use case using geraetegruppe_name and bezeichnung."""
         sql = f"""
             SELECT
-                id, bezeichnung, hersteller, kategorie, geraetegruppe,
-                einsatzgebiete, inhalt
-            FROM geraete
-            WHERE '{use_case}' = ANY(einsatzgebiete)
-               OR inhalt ILIKE '%{use_case}%'
-            LIMIT {limit}
+                id,
+                bezeichnung,
+                hersteller_name,
+                geraetegruppe_name,
+                verwendung_code,
+                seriennummer,
+                inventarnummer
+            FROM {self.equipment_table}
+            WHERE geraetegruppe_name ILIKE %s
+               OR bezeichnung ILIKE %s
+            LIMIT %s
         """
-        return self.execute_query(sql)
+        pattern = f"%{use_case}%"
+        return self.execute_query(sql, (pattern, pattern, limit))
 
     def execute_dynamic_sql(self, sql: str) -> List[Dict[str, Any]]:
         """
@@ -285,36 +507,9 @@ class PostgresService:
         Returns:
             Query results
         """
-        # Clean up SQL
-        sql = sql.strip()
-        sql_upper = sql.upper()
-
-        # Block dangerous operations
-        dangerous_keywords = ['DROP', 'DELETE', 'UPDATE', 'INSERT', 'ALTER', 'TRUNCATE']
-        for keyword in dangerous_keywords:
-            if keyword in sql_upper:
-                print(f"[PostgreSQL] Blocked dangerous SQL: {keyword}")
-                return []
-
-        # Must be a SELECT (or UNION which starts with (SELECT)
-        if not (sql_upper.startswith('SELECT') or sql_upper.startswith('(SELECT')):
-            print("[PostgreSQL] Only SELECT queries allowed")
+        prepared_sql, error = self.prepare_readonly_sql(sql, default_limit=10000)
+        if error:
+            print(f"[PostgreSQL] Blocked SQL: {error}")
             return []
 
-        # Validate SQL has balanced parentheses (detect truncated SQL)
-        if sql.count('(') != sql.count(')'):
-            print("[PostgreSQL] Malformed SQL: unbalanced parentheses")
-            return []
-
-        # Add high safety LIMIT only if none specified
-        # This prevents runaway queries while allowing full result sets
-        sql = sql.rstrip(';')
-        is_union_query = 'UNION' in sql_upper
-        if 'LIMIT' not in sql_upper and not is_union_query:
-            sql += ' LIMIT 10000'
-
-        return self.execute_query(sql)
-
-
-# Global instance
-postgres_service = PostgresService()
+        return self.execute_query(prepared_sql)
