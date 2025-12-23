@@ -22,7 +22,7 @@
 
 Teams-BOT connects **Microsoft Teams** (via **Bot Framework**) to an LLM-backed assistant with **tool access**:
 
-- **Structured data**: PostgreSQL (`geraete` view) via safe, SELECT-only SQL
+- **Structured data**: PostgreSQL (`equipment_matrix`) via safe, SELECT-only SQL
 - **Unstructured/internal docs**: Pinecone semantic search (documents + machinery namespaces)
 - **Optional web**: Tavily search for supplemental, external info
 - **Multi-turn conversations**: Redis-backed history with per-user isolation
@@ -62,7 +62,10 @@ AZURE_TENANT_ID=
 PINECONE_API_KEY=
 PINECONE_HOST=
 POSTGRES_HOST=
+POSTGRES_PORT=
 POSTGRES_DB=
+POSTGRES_SCHEMA=
+POSTGRES_EQUIPMENT_TABLE=
 POSTGRES_USER=
 POSTGRES_PASSWORD=
 ```
@@ -102,7 +105,7 @@ FastAPI (app.py)
   |
   v
 Unified Agent (rag/unified_agent.py)
-  |-- execute_sql         -> PostgreSQL (geraete view)
+  |-- execute_sql         -> PostgreSQL (equipment_matrix)
   |-- semantic_search     -> Pinecone (documents/machinery)
   `-- web_search (opt.)   -> Tavily
 ```
@@ -166,11 +169,11 @@ gcloud run services update teams-bot \
 
 ## Testing
 
-Most tests are **live-service** checks and require environment variables (`.env`) for OpenAI/Pinecone/Postgres (and optionally Redis).
+Most tests are **live-service** checks and require environment variables (`.env`) for OpenAI/Pinecone/Postgres (and optionally Redis). For deterministic checks, use the quality guard unit tests and evaluation harness.
 
 ```bash
-python tests/test_agent.py
-python tests/simple_test.py -f tests/TEST_15_ESSENTIAL_QUESTIONS.txt
+python -m unittest tests/test_quality_guards.py
+python tests/eval_harness.py --cases tests/qa_cases.json --results tests/sample_results.json
 ```
 
 ---
