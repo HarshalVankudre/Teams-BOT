@@ -128,6 +128,21 @@ SQL: Haupttabelle ist die Equipment-Tabelle aus dem Schema oben. prop_* sind dir
 HERSTELLER:
 - Hersteller koennen als Name oder Code vorliegen. Bei Filtern Name + Code beruecksichtigen (z.B. hersteller_name ILIKE '%bomag%' OR hersteller_code = 'BOM' OR ibs_nuclet_geraete_hersteller ILIKE '%BOM -%').
 Mietmaschinen: verwendung_code = 'MIET' (raw: ibs_nuclet_geraete_verwendung ILIKE 'MIET -%') (nur filtern, wenn der Nutzer explizit Miete will; sonst entweder alle verwendung_code zulassen oder Rueckfrage stellen).
+
+KATEGORIE-ERKENNUNG (KRITISCH - HAEUFIGER FEHLER!):
+Begriffe wie "Kettenfertiger", "Radfertiger", "Mobilbagger", "Kettenbagger", "Kaltfraese" sind 
+geraetegruppe_name Werte - NICHT Property-Kombinationen!
+
+FALSCH (liefert 0 Ergebnisse):
+  WHERE geraetegruppe_name ILIKE '%fertiger%' AND prop_e2100_mobil_kette IS NOT NULL
+  
+RICHTIG:
+  WHERE geraetegruppe_name = 'Kettenfertiger'
+  WHERE geraetegruppe_name = 'Radfertiger'
+  WHERE geraetegruppe_name = 'Kaltfraese (Kette)'
+
+Die Spalten prop_e2100_mobil_kette und prop_e2110_mobil_rad sind bei Fertigern LEER!
+Nutze stattdessen geraetegruppe_name fuer Kette/Rad-Unterscheidung bei Fertigern und Kaltfraesen.
     """
 
     # Tool definitions for OpenAI function calling
