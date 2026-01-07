@@ -30,6 +30,7 @@ class PostgresConfig:
     password: str
     schema: str
     equipment_table: str
+    sslmode: str = ""
 
     @classmethod
     def from_env(cls) -> "PostgresConfig":
@@ -41,6 +42,7 @@ class PostgresConfig:
             password=os.getenv("POSTGRES_PASSWORD", ""),
             schema=os.getenv("POSTGRES_SCHEMA", ""),
             equipment_table=os.getenv("POSTGRES_EQUIPMENT_TABLE", ""),
+            sslmode=os.getenv("POSTGRES_SSLMODE", ""),
         )
 
     def validate(self) -> Optional[str]:
@@ -78,13 +80,16 @@ class PostgresConfig:
         return f"{self.schema}.{self.equipment_table}"
 
     def to_dict(self) -> Dict[str, str]:
-        return {
+        result = {
             "host": self.host,
             "port": self.port,
             "database": self.database,
             "user": self.user,
             "password": self.password
         }
+        if self.sslmode:
+            result["sslmode"] = self.sslmode
+        return result
 
 
 class PostgresService:
