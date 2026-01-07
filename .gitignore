@@ -73,7 +73,13 @@ deploy.zip
 *.pem
 *.key
 credentials.json
+db_credentials.json
 service-account*.json
+
+# Data exports (may contain sensitive data)
+sema_data_export.json
+sema_data_export.xlsx
+nul
 
 # Claude Code
 .claude/

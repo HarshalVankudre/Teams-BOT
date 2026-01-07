@@ -23,6 +23,7 @@ from .schema import SQL_AGENT_SCHEMA
 from .postgres import PostgresService
 from .sql_guard import SQLGuard, SQLIntent
 from .answer_guard import AnswerGuard, AnswerContext
+from .property_resolver import create_property_resolver
 
 
 @dataclass
@@ -62,8 +63,13 @@ TOOLS:
 
 DATENPRIORITÄT (WICHTIG):
 - Interne Daten (SQL + interne Dokumente) haben immer Vorrang.
-- Wenn interne Quellen vorhanden sind, nutze sie und zitiere sie.
-- Wenn interne Daten fehlen: sag das explizit und stelle gezielte Rückfragen.
+- Wenn interne Quellen vorhanden sind, nutze sie. Nenne Quellen nur, wenn der Nutzer explizit danach fragt (z.B. "Quelle", "Quellen", "Beleg", "Source").
+- Wenn interne Daten fehlen: sag das explizit und stelle gezielte Rückfragen.  
+DATENGRUNDLAGE (VERBINDLICH):
+- Antworte ausschliesslich mit Daten aus execute_sql oder search_documents.
+- Nutze keine allgemeinen Kenntnisse, Annahmen oder externes Wissen.
+- Wenn keine internen Daten vorhanden sind: sag das klar und frage gezielt nach.
+
 
 KONTEXT-BEWUSSTSEIN (SEHR WICHTIG):
 Du siehst den gesamten Gesprächsverlauf. Nutze ihn IMMER!
@@ -100,8 +106,8 @@ EMPFEHLUNGS-WORKFLOW (Best Practice):
 5) Alternativen: Nenne 2-3 Alternativen + wann sie besser wären.
 
 MEHRKRITERIEN-RANKING (SQL-Hilfe):
-- Verfügbarkeit: nuclos_state = 'Released' zuerst (Locked nur als Fallback mit Hinweis).
-- Nutzung: Wenn der Nutzer Miete will: verwendung_code = 'MIET' bevorzugen.
+- Verfuegbarkeit: nuclos_state = 'Released' (raw: ibs_nuclet_geraete_nuclosstate). Locked nur als Fallback.
+- Nutzung: Wenn der Nutzer Miete will: verwendung_code = 'MIET' (raw: ibs_nuclet_geraete_verwendung ILIKE 'MIET -%').
 - Passgenauigkeit bei Zahlenanforderungen: z.B. fit_delta = COALESCE(prop_einbaubreite_max,0) - 3.0 (kleinste positive Differenz zuerst).
 - Datenvollständigkeit (um "alle anderen Props" einzubeziehen, ohne zu raten):
   data_completeness = (SELECT COUNT(*) FROM jsonb_each(jsonb_strip_nulls(to_jsonb(e))))
@@ -112,16 +118,17 @@ WENN der Nutzer messbare Anforderungen nennt (z.B. "3m", "2,5m"):
 - Du musst die gesamte Kandidatenmenge berücksichtigen (mindestens via COUNT + Ranking-Query), nicht nur ein kleines Sample.
 
 Für Fertiger/Asphalt-Einbau:
-- Breite primär über prop_einbaubreite_max (in Metern) prüfen (z.B. >= 3.0).
-- Zusätzlich vergleichen (falls vorhanden): prop_einbaubreite_grundbohle, prop_einbaustaerke, prop_motor_leistung, prop_gewicht, nuclos_state, verwendung_code, data_completeness.
+- Breite primaer ueber prop_einbaubreite_max (raw: prop_e1480_einbaubreite_max_m) pruefen (z.B. >= 3.0).
+- Zusaetzlich vergleichen (falls vorhanden): prop_einbaubreite_grundbohle (raw: prop_e1470_einbaubreite_grundbohle_m), prop_einbaubreite_mit_verbreiterungen (raw: prop_e1490_einbaubreite_mit_verbreiterungen_m), prop_motor_leistung (raw: prop_e2180_motor_leistung_kw), prop_gewicht (raw: prop_e1730_gewicht_kg), nuclos_state, verwendung_code, data_completeness.
 
 FOLLOW-UPS:
 - Bei "welche davon/diese/die alle": beziehe dich auf das zuletzt gelistete Resultset (Thread Context) und halte Filter/Kriterien konstant.
 
 SQL: Haupttabelle ist die Equipment-Tabelle aus dem Schema oben. prop_* sind direkte Spalten (BOOLEAN/DOUBLE/TEXT).
 HERSTELLER:
-- Hersteller kA¶nnen als Name oder Code vorliegen. Bei Filtern Name + Code berA¼cksichtigen (z.B. hersteller_name ILIKE '%bomag%' OR hersteller_code = 'BOM').
-Mietmaschinen: verwendung_code = 'MIET' (nur filtern, wenn der Nutzer explizit Miete will; sonst entweder alle verwendung_code zulassen oder Rueckfrage stellen)."""
+- Hersteller koennen als Name oder Code vorliegen. Bei Filtern Name + Code beruecksichtigen (z.B. hersteller_name ILIKE '%bomag%' OR hersteller_code = 'BOM' OR ibs_nuclet_geraete_hersteller ILIKE '%BOM -%').
+Mietmaschinen: verwendung_code = 'MIET' (raw: ibs_nuclet_geraete_verwendung ILIKE 'MIET -%') (nur filtern, wenn der Nutzer explizit Miete will; sonst entweder alle verwendung_code zulassen oder Rueckfrage stellen).
+    """
 
     # Tool definitions for OpenAI function calling
     TOOLS = [
@@ -184,11 +191,24 @@ Mietmaschinen: verwendung_code = 'MIET' (nur filtern, wenn der Nutzer explizit M
         self.client = AsyncOpenAI(api_key=config.openai_api_key)
         self.postgres = PostgresService()
         self.pinecone = pinecone_service
+        
+        # Initialize property resolver for dynamic column name resolution
+        self.property_resolver = create_property_resolver(self.postgres)
+        
+        # SQL guard with lenient validation (strict_validation=False)
         self.sql_guard = SQLGuard(
             equipment_table=self.postgres.equipment_table,
             column_resolver=self.postgres.get_column_info,
+            property_resolver=self.property_resolver,
+            strict_validation=False,  # Lenient mode - warnings instead of errors
         )
-        self.answer_guard = AnswerGuard()
+        
+        # Answer guard with relaxed limits
+        self.answer_guard = AnswerGuard(
+            max_sentences=8,
+            max_bullets=10,
+            max_chars=2500,
+        )
 
         # Per-thread memory (helps follow-ups like "davon/diese/welche").
         # Keyed by thread_key to avoid cross-user leakage in shared agent instances.
@@ -305,6 +325,22 @@ Mietmaschinen: verwendung_code = 'MIET' (nur filtern, wenn der Nutzer explizit M
         for key in expired_keys:
             self._thread_state.pop(key, None)
 
+    def _record_turn_context(
+        self,
+        thread_key: str,
+        user_query: str,
+        assistant_response: str,
+    ) -> None:
+        state = self._thread_state.get(thread_key, {})
+        now = time.time()
+        state.update({
+            "last_turn_at": now,
+            "last_user_message": (user_query or "")[:400],
+            "last_assistant_response": (assistant_response or "")[:800],
+            "updated_at": now,
+        })
+        self._thread_state[thread_key] = state
+
     @staticmethod
     def _extract_width_m(text: str) -> Optional[float]:
         """
@@ -397,7 +433,7 @@ Mietmaschinen: verwendung_code = 'MIET' (nur filtern, wenn der Nutzer explizit M
                 content = content[:1200] + "…"
 
             parts.append(
-                f"### Quelle {i}: {title}\n"
+                f"### Dokument {i}: {title}\n"
                 f"- Datei: {source_file}\n"
                 f"- Relevanz: {score:.2%}\n\n"
                 f"{content}"
@@ -408,9 +444,9 @@ Mietmaschinen: verwendung_code = 'MIET' (nur filtern, wenn der Nutzer explizit M
             "## INTERNE DOKUMENTE (Pinecone Suche)\n"
             f"{joined}\n\n"
             "REGELN:\n"
-            "- Nutze diese internen Quellen als Primärquelle.\n"
-            "- Zitiere als: \"Laut [Quelle X: Titel – Datei] …\".\n"
-            "- Wenn die Quellen die Frage nicht beantworten: sag das und frage gezielt nach fehlenden Details."
+            "- Nutze diese internen Dokumente als Primaerquelle.\n"
+            "- Nenne Quellen nur, wenn der Nutzer explizit danach fragt (z.B. \"Quelle\", \"Quellen\", \"Beleg\", \"Source\").\n"
+            "- Wenn die Dokumente die Frage nicht beantworten: sag das und frage gezielt nach fehlenden Details."
         )
 
     def _sources_from_document_results(self, results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -485,11 +521,19 @@ Mietmaschinen: verwendung_code = 'MIET' (nur filtern, wenn der Nutzer explizit M
         })
 
         manufacturer_matches = self._manufacturer_matches_for_query(user_query)
-        intent = self.sql_guard.extract_intent(
-            user_query,
-            thread_state=thread_state,
-            manufacturer_matches=manufacturer_matches,
-        )
+        if self.sql_guard:
+            intent = self.sql_guard.extract_intent(
+                user_query,
+                thread_state=thread_state,
+                manufacturer_matches=manufacturer_matches,
+            )
+        else:
+            intent = SQLIntent(
+                query=user_query,
+                requires_sql=False,
+                prefers_sql=False,
+                prefers_documents=False,
+            )
         execution_logs.append({
             "event": "sql_intent",
             "intent": intent.to_dict(),
@@ -503,6 +547,7 @@ Mietmaschinen: verwendung_code = 'MIET' (nur filtern, wenn der Nutzer explizit M
                 "message": intent.clarification,
                 "timestamp": time.time()
             })
+            self._record_turn_context(tk, user_query, intent.clarification)
             return AgentResult(
                 response=intent.clarification,
                 success=True,
@@ -528,7 +573,9 @@ Mietmaschinen: verwendung_code = 'MIET' (nur filtern, wenn der Nutzer explizit M
         if manufacturer_hints:
             messages.append({"role": "system", "content": manufacturer_hints})
 
-        policy_message = self.sql_guard.build_policy_message(intent)
+        policy_message = (
+            self.sql_guard.build_policy_message(intent) if self.sql_guard else None
+        )
         if policy_message:
             messages.append({"role": "system", "content": policy_message})
         
@@ -728,27 +775,29 @@ Mietmaschinen: verwendung_code = 'MIET' (nur filtern, wenn der Nutzer explizit M
             final_response = message.content or "Keine Antwort verfügbar."
             sources = self._dedupe_sources(sources)
             tools_used = list(dict.fromkeys(tools_used))
-            guard_context = AnswerContext(
-                query=user_query,
-                tools_used=tools_used,
-                sql_results_count=sql_results_count,
-                sql_error=sql_errors[-1] if sql_errors else None,
-                sources=sources,
-                equipment_table=self.postgres.equipment_table,
-                intent=intent,
-            )
-            guarded = self.answer_guard.apply(final_response, guard_context)
-            final_response = guarded.response
-            if guarded.issues:
-                execution_logs.append({
-                    "event": "response_guard",
-                    "issues": guarded.issues,
-                    "timestamp": time.time()
-                })
-            
+            if self.answer_guard:
+                guard_context = AnswerContext(
+                    query=user_query,
+                    tools_used=tools_used,
+                    sql_results_count=sql_results_count,
+                    sql_error=sql_errors[-1] if sql_errors else None,
+                    sources=sources,
+                    equipment_table=self.postgres.equipment_table,
+                    intent=intent,
+                )
+                guarded = self.answer_guard.apply(final_response, guard_context)
+                final_response = guarded.response
+                if guarded.issues:
+                    execution_logs.append({
+                        "event": "response_guard",
+                        "issues": guarded.issues,
+                        "timestamp": time.time()
+                    })
+
             execution_time = int((time.time() - start_time) * 1000)
             self._log(f"Completed in {execution_time}ms, tools: {tools_used}")
-            
+            self._record_turn_context(tk, user_query, final_response)
+
             execution_logs.append({
                 "event": "final_response",
                 "content": final_response[:200] + "...",
@@ -820,6 +869,57 @@ Mietmaschinen: verwendung_code = 'MIET' (nur filtern, wenn der Nutzer explizit M
 
         self._log(f"SQL [{purpose}]: {sql[:100]}...")
 
+        def _extract_table_alias(query: str) -> Optional[str]:
+            match = re.search(
+                r"\bfrom\s+([a-zA-Z0-9_\.\"\-]+)(?:\s+(?:as\s+)?([a-zA-Z0-9_]+))?",
+                query,
+                re.IGNORECASE,
+            )
+            if not match:
+                return None
+            alias = match.group(2)
+            if not alias or alias.lower() in {"where", "group", "order", "limit", "fetch", "offset"}:
+                return None
+            return alias
+
+        def _inject_usage_filter(query: str, usage_code: str) -> str:
+            query = (query or "").rstrip().rstrip(";")
+            alias = _extract_table_alias(query)
+            columns = self.sql_guard._get_columns() if self.sql_guard else {}   
+            available = {name.lower() for name in (columns or {}).keys()}       
+            use_raw = "verwendung_code" not in available and "ibs_nuclet_geraete_verwendung" in available
+            if use_raw:
+                column = f"{alias}.ibs_nuclet_geraete_verwendung" if alias else "ibs_nuclet_geraete_verwendung"
+                condition = f"{column} ILIKE '{usage_code} -%'"
+            else:
+                column = f"{alias}.verwendung_code" if alias else "verwendung_code"
+                condition = f"{column} = '{usage_code}'"
+            clause_match = re.search(
+                r"\b(group\s+by|order\s+by|limit|fetch\s+first|offset)\b",
+                query,
+                re.IGNORECASE,
+            )
+            if re.search(r"\bwhere\b", query, re.IGNORECASE):
+                if clause_match:
+                    return query[: clause_match.start()] + f" AND {condition} " + query[clause_match.start() :]
+                return query + f" AND {condition}"
+            if clause_match:
+                return query[: clause_match.start()] + f" WHERE {condition} " + query[clause_match.start() :]
+            return query + f" WHERE {condition}"
+
+        def _strip_limit_offset_fetch(query: str) -> str:
+            cleaned = (query or "").strip().rstrip(";")
+            cleaned = re.sub(r"\bfetch\s+first\s+\d+\s+rows?\s+only\b", "", cleaned, flags=re.IGNORECASE)
+            cleaned = re.sub(r"\bfetch\s+first\s+\d+\b", "", cleaned, flags=re.IGNORECASE)
+            cleaned = re.sub(r"\blimit\s+\d+\b", "", cleaned, flags=re.IGNORECASE)
+            cleaned = re.sub(r"\boffset\s+\d+\b", "", cleaned, flags=re.IGNORECASE)
+            cleaned = re.sub(r"\s+", " ", cleaned).strip()
+            return cleaned
+
+        def _wrap_count(query: str) -> str:
+            cleaned = _strip_limit_offset_fetch(query)
+            return f"SELECT COUNT(*) AS count FROM ({cleaned}) AS subq"
+
         if not self.postgres.available:
             return {
                 "purpose": purpose,
@@ -835,19 +935,76 @@ Mietmaschinen: verwendung_code = 'MIET' (nur filtern, wenn der Nutzer explizit M
                 prefers_documents=False,
             )
 
-        validation = self.sql_guard.validate_sql(sql, intent)
-        if not validation.ok:
-            return {
-                "purpose": purpose,
-                "sql": sql,
-                "error": "SQL validation failed",
-                "validation_errors": validation.errors,
-                "validation_warnings": validation.warnings,
-                "normalized_sql": validation.normalized_sql,
-                "referenced_tables": validation.referenced_tables,
-                "referenced_columns": validation.referenced_columns,
-                "limit_value": validation.limit_value,
-            }
+        validation = self.sql_guard.validate_sql(sql, intent) if self.sql_guard else None
+        if validation and not validation.ok:
+            corrected_sql = None
+            unknown_prop_errors = [
+                err for err in validation.errors
+                if err.lower().startswith("unknown prop column")
+            ]
+            other_errors = [
+                err for err in validation.errors
+                if not err.lower().startswith("unknown prop column")
+            ]
+            if (
+                validation.prop_column_suggestions
+                and not other_errors
+                and len(unknown_prop_errors) == len(validation.prop_column_suggestions)
+            ):
+                corrected_sql = sql
+                for bad, good in validation.prop_column_suggestions.items():
+                    pattern = re.compile(rf"\b{re.escape(bad)}\b", re.IGNORECASE)
+                    corrected_sql = pattern.sub(good, corrected_sql)
+                if corrected_sql != sql:
+                    validation = self.sql_guard.validate_sql(corrected_sql, intent)
+                    if validation.ok:
+                        sql = corrected_sql
+                        corrected_sql = None
+
+            missing_usage = None
+            if any(err == "Missing constraint: usage_rental" for err in validation.errors):
+                missing_usage = "MIET"
+            elif any(err == "Missing constraint: usage_sales" for err in validation.errors):
+                missing_usage = "VK"
+            missing_count = any(
+                err == "Missing constraint: count" or err == "Count query missing COUNT()."
+                for err in validation.errors
+            )
+            non_fixable = [
+                err
+                for err in validation.errors
+                if not err.lower().startswith("unknown prop column")
+                and err not in {
+                    "Missing constraint: usage_rental",
+                    "Missing constraint: usage_sales",
+                    "Missing constraint: count",
+                    "Count query missing COUNT().",
+                }
+            ]
+            if (missing_usage or missing_count) and not non_fixable:
+                corrected_sql = sql
+                if missing_usage:
+                    corrected_sql = _inject_usage_filter(corrected_sql, missing_usage)
+                if missing_count:
+                    corrected_sql = _wrap_count(corrected_sql)
+                if corrected_sql != sql:
+                    validation = self.sql_guard.validate_sql(corrected_sql, intent)
+                    if validation.ok:
+                        sql = corrected_sql
+                        corrected_sql = None
+
+            if not validation.ok:
+                return {
+                    "purpose": purpose,
+                    "sql": sql,
+                    "error": "SQL validation failed",
+                    "validation_errors": validation.errors,
+                    "validation_warnings": validation.warnings,
+                    "normalized_sql": validation.normalized_sql,
+                    "referenced_tables": validation.referenced_tables,
+                    "referenced_columns": validation.referenced_columns,
+                    "limit_value": validation.limit_value,
+                }
 
         prepared_sql, error = self.postgres.prepare_readonly_sql(sql, default_limit=10000)
         if error:
@@ -872,10 +1029,10 @@ Mietmaschinen: verwendung_code = 'MIET' (nur filtern, wenn der Nutzer explizit M
             "row_count": len(results),
             "results": results[:50] if len(results) > 50 else results,
             "truncated": len(results) > 50,
-            "validation_warnings": validation.warnings,
-            "referenced_tables": validation.referenced_tables,
-            "referenced_columns": validation.referenced_columns,
-            "limit_value": validation.limit_value,
+            "validation_warnings": validation.warnings if validation else [],
+            "referenced_tables": validation.referenced_tables if validation else [],
+            "referenced_columns": validation.referenced_columns if validation else [],
+            "limit_value": validation.limit_value if validation else None,
         }
 
     async def _search_documents(self, args: Dict[str, Any]) -> Dict[str, Any]:

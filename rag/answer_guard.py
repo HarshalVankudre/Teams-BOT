@@ -9,7 +9,7 @@ import unicodedata
 from typing import Any, Dict, List, Optional
 
 
-_SMALLTALK_RE = re.compile(r"\b(hallo|hi|hello|hey|moin|servus|danke|thanks)\b")
+_SMALLTALK_RE = re.compile(r"\b(hallo|hi|hello|hey|moin|servus|danke|thanks|guten\s*tag|gruss)\b")
 _PROMPT_INJECTION_RE = re.compile(
     r"\b(ignore|ignoriere|override|bypass|system prompt|systemprompt)\b"
 )
@@ -18,6 +18,10 @@ _SECRETS_RE = re.compile(
 )
 _EXFIL_RE = re.compile(r"\b(show|zeige|gib|liste|reveal|leak)\b")
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+_HELP_QUESTION_RE = re.compile(
+    r"\b(wie\s+funktioniert|was\s+bedeutet|was\s+ist|erklar|hilfe|help|"
+    r"kannst\s+du|was\s+kannst|wozu|wofur|warum)\b"
+)
 
 
 def _normalize_text(text: str) -> str:
@@ -80,7 +84,7 @@ class AnswerGuard:
                 issues=issues,
             )
 
-        if context.sql_error:
+        if context.sql_error and context.sql_results_count == 0:
             issues.append("sql_error")
             error_preview = (context.sql_error or "").strip()
             if len(error_preview) > 160:
@@ -114,6 +118,7 @@ class AnswerGuard:
             issues.append("no_data")
             return GuardedResponse(
                 response=(
+                    "Ich kann nur mit internen Daten (SQL + Pinecone) antworten. "
                     "In den internen Datenbanken wurde keine Information gefunden. "
                     "Gibt es einen Hersteller, Maschinentyp oder weitere Kriterien?"
                 ),
@@ -152,11 +157,16 @@ class AnswerGuard:
             return False
         if context.sources or context.sql_results_count > 0:
             return False
-        if context.tools_used and "execute_sql" in context.tools_used:
-            return True
-        if getattr(context.intent, "requires_sql", False):
-            return True
-        return False
+        # Trust SQL execution even with 0 results - 0 is a valid answer
+        if "execute_sql" in (context.tools_used or []):
+            return False
+        # General/help questions don't need data lookup
+        if self._is_help_question(normalized_query):
+            return False
+        return True
+
+    def _is_help_question(self, normalized_query: str) -> bool:
+        return bool(_HELP_QUESTION_RE.search(normalized_query))
 
     def _trim_response(self, response: str) -> str:
         text = (response or "").strip()

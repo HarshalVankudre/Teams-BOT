@@ -6,6 +6,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import re
 import unicodedata
+import difflib
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 try:
@@ -20,6 +21,18 @@ _WHITESPACE_RE = re.compile(r"\s+")
 _TOP_N_RE = re.compile(r"\btop\s+(\d+)\b")
 _LIMIT_N_RE = re.compile(r"\b(?:zeige|liste|list|show|gib|give)\b.*?\b(\d+)\b")
 _FOLLOWUP_RE = re.compile(r"\b(davon|diese|diesen|diese[nr]?|welche\s+davon|die\s+alle)\b")
+_CONTEXT_REF_RE = re.compile(
+    r"\b("
+    r"davon|diese|diesen|diese[nr]?|welche\s+davon|die\s+alle|"
+    r"solch(?:e|en|er|em|es)?|"
+    r"so\s+(?:eine|ein|welche|etwas)|"
+    r"derartige[nr]?|"
+    r"genannte[nr]?|"
+    r"vorherige[nr]?|"
+    r"obige[nr]?|"
+    r"oben\s+genannte[nr]?"
+    r")\b"
+)
 _COUNT_RE = re.compile(r"\b(wie\s+viele|anzahl|count)\b")
 _GROUP_BY_RE = re.compile(
     r"\b(pro|nach)\s+(hersteller|manufacturer|gerategruppe|geraetegruppe|gruppe|verwendung)\b"
@@ -27,7 +40,13 @@ _GROUP_BY_RE = re.compile(
 _TIME_RANGE_RE = re.compile(
     r"\b(letzte[nr]?|letzten|seit|zwischen|in\s+den\s+letzten|last\s+\d+|last\s+month|last\s+year|\d{4})\b"
 )
-_DOC_RE = re.compile(r"\b(handbuch|anleitung|dokument|manual|pdf|richtlinie|policy)\b")
+_DOC_RE = re.compile(
+    r"\b("
+    r"handbuch|anleitung|dokument|manual|pdf|richtlinie|policy|"
+    r"agb|vereinbarung(?:en)?|formular(?:e)?|vorlage(?:n)?|"
+    r"\w*vertrag(?:e|en|s)?"
+    r")\b"
+)
 _STRUCTURED_RE = re.compile(
     r"\b(seriennummer|inventarnummer|hersteller|maschine|maschinen|"
     r"gerat|gerate|geraet|geraete|"
@@ -102,6 +121,7 @@ class SQLValidationResult:
     referenced_tables: List[str] = field(default_factory=list)
     referenced_columns: List[str] = field(default_factory=list)
     limit_value: Optional[int] = None
+    prop_column_suggestions: Dict[str, str] = field(default_factory=dict)
 
 
 class SQLGuard:
@@ -110,10 +130,14 @@ class SQLGuard:
         *,
         equipment_table: Optional[str],
         column_resolver: Optional[Callable[[], Dict[str, str]]] = None,
+        property_resolver: Optional[Any] = None,
+        strict_validation: bool = False,
     ):
         self.equipment_table = equipment_table
         self._column_resolver = column_resolver
         self._cached_columns: Optional[Dict[str, str]] = None
+        self._property_resolver = property_resolver
+        self._strict_validation = strict_validation
 
     def _get_columns(self) -> Dict[str, str]:
         if self._cached_columns is not None:
@@ -127,6 +151,12 @@ class SQLGuard:
             self._cached_columns = {}
         return self._cached_columns
 
+    @staticmethod
+    def _suggest_columns(name: str, columns: Sequence[str]) -> List[str]:
+        if not name or not columns:
+            return []
+        return difflib.get_close_matches(name, list(columns), n=3, cutoff=0.78)
+
     def _guess_date_columns(self) -> List[str]:
         columns = self._get_columns()
         candidates = []
@@ -135,6 +165,26 @@ class SQLGuard:
             if any(token in lowered for token in ("date", "datum", "created", "updated")):
                 candidates.append(name)
         return candidates
+
+    @staticmethod
+    def _has_thread_context(thread_state: Optional[Dict[str, Any]]) -> bool:
+        if not thread_state:
+            return False
+        if thread_state.get("last_result_ids"):
+            return True
+        if thread_state.get("last_sql_purpose"):
+            return True
+        if thread_state.get("last_sql_results_sample"):
+            return True
+        if thread_state.get("target_width_m") is not None:
+            return True
+        if thread_state.get("last_sql_row_count") is not None:
+            return True
+        if thread_state.get("last_turn_at") is not None:
+            return True
+        if thread_state.get("last_user_message"):
+            return True
+        return False
 
     def _intent_requires_sql(self, normalized_query: str) -> bool:
         if _DOC_RE.search(normalized_query) and not _STRUCTURED_RE.search(normalized_query):
@@ -160,6 +210,7 @@ class SQLGuard:
         requires_sql = self._intent_requires_sql(normalized_query)
         prefers_sql = self._intent_prefers_sql(normalized_query)
         prefers_documents = self._intent_prefers_documents(normalized_query)
+        doc_query = prefers_documents
         intent = SQLIntent(
             query=user_query,
             requires_sql=requires_sql,
@@ -167,197 +218,219 @@ class SQLGuard:
             prefers_documents=prefers_documents,
         )
 
-        if _COUNT_RE.search(normalized_query):
-            intent.request_type = "count"
-            intent.required_constraints.append(
-                SQLConstraint(
-                    name="count",
-                    description="Use COUNT(*) for count questions.",
-                    patterns=[re.compile(r"\bcount\s*\(", re.IGNORECASE)],
-                )
-            )
-
-        top_match = _TOP_N_RE.search(normalized_query) or _LIMIT_N_RE.search(normalized_query)
-        if top_match:
-            try:
-                intent.requested_limit = int(top_match.group(1))
-            except (ValueError, TypeError):
-                intent.requested_limit = None
-            if intent.requested_limit:
+        if not doc_query:
+            if _COUNT_RE.search(normalized_query):
+                intent.request_type = "count"
                 intent.required_constraints.append(
                     SQLConstraint(
-                        name="limit",
-                        description=f"Limit results to {intent.requested_limit}.",
+                        name="count",
+                        description="Use COUNT(*) for count questions.",
+                        patterns=[re.compile(r"\bcount\s*\(", re.IGNORECASE)],
+                    )
+                )
+
+            top_match = _TOP_N_RE.search(normalized_query) or _LIMIT_N_RE.search(normalized_query)
+            if top_match:
+                try:
+                    intent.requested_limit = int(top_match.group(1))
+                except (ValueError, TypeError):
+                    intent.requested_limit = None
+                if intent.requested_limit:
+                    intent.required_constraints.append(
+                        SQLConstraint(
+                            name="limit",
+                            description=f"Limit results to {intent.requested_limit}.",
+                            patterns=[
+                                re.compile(rf"\blimit\s+{intent.requested_limit}\b", re.IGNORECASE),
+                                re.compile(rf"\bfetch\s+first\s+{intent.requested_limit}\b", re.IGNORECASE),
+                            ],
+                        )
+                    )
+
+            if _GROUP_BY_RE.search(normalized_query):
+                intent.required_constraints.append(
+                    SQLConstraint(
+                        name="group_by",
+                        description="Use GROUP BY when user asks for grouping.",
+                        patterns=[re.compile(r"\bgroup\s+by\b", re.IGNORECASE)],
+                    )
+                )
+
+            if _RENTAL_RE.search(normalized_query):
+                intent.required_constraints.append(
+                    SQLConstraint(
+                        name="usage_rental",
+                        description="Filter to rental usage (MIET).",
                         patterns=[
-                            re.compile(rf"\blimit\s+{intent.requested_limit}\b", re.IGNORECASE),
-                            re.compile(rf"\bfetch\s+first\s+{intent.requested_limit}\b", re.IGNORECASE),
+                            re.compile(r"\bverwendung_code\s*=\s*'MIET'\b", re.IGNORECASE),
+                            re.compile(r"\bverwendung_code\s+in\s*\([^)]*'MIET'[^)]*\)", re.IGNORECASE),
+                            re.compile(r"\bverwendung_name\s+ilike\s+'%miet%'", re.IGNORECASE),
+                            re.compile(r"\bibs_nuclet_geraete_verwendung\s+ilike\s+'%miet%'", re.IGNORECASE),
+                            re.compile(r"\bibs_nuclet_geraete_verwendung\s+like\s+'MIET%'", re.IGNORECASE),
+                            re.compile(r"\bibs_nuclet_geraete_verwendung\s*=\s*'MIET - Vermietung'\b", re.IGNORECASE),
                         ],
                     )
                 )
 
-        if _GROUP_BY_RE.search(normalized_query):
-            intent.required_constraints.append(
-                SQLConstraint(
-                    name="group_by",
-                    description="Use GROUP BY when user asks for grouping.",
-                    patterns=[re.compile(r"\bgroup\s+by\b", re.IGNORECASE)],
-                )
-            )
-
-        if _RENTAL_RE.search(normalized_query):
-            intent.required_constraints.append(
-                SQLConstraint(
-                    name="usage_rental",
-                    description="Filter to rental usage (MIET).",
-                    patterns=[
-                        re.compile(r"\bverwendung_code\s*=\s*'MIET'\b", re.IGNORECASE),
-                        re.compile(r"\bverwendung_code\s+in\s*\([^)]*'MIET'[^)]*\)", re.IGNORECASE),
-                        re.compile(r"\bverwendung_name\s+ilike\s+'%miet%'", re.IGNORECASE),
-                    ],
-                )
-            )
-
-        if _SALES_RE.search(normalized_query):
-            intent.required_constraints.append(
-                SQLConstraint(
-                    name="usage_sales",
-                    description="Filter to sales usage (VK).",
-                    patterns=[
-                        re.compile(r"\bverwendung_code\s*=\s*'VK'\b", re.IGNORECASE),
-                        re.compile(r"\bverwendung_code\s+in\s*\([^)]*'VK'[^)]*\)", re.IGNORECASE),
-                        re.compile(r"\bverwendung_name\s+ilike\s+'%verkauf%'", re.IGNORECASE),
-                    ],
-                )
-            )
-
-        if _AVAIL_RE.search(normalized_query):
-            intent.required_constraints.append(
-                SQLConstraint(
-                    name="availability_released",
-                    description="Filter to released/available machines.",
-                    patterns=[
-                        re.compile(r"\bnuclos_state\s*=\s*'Released'\b", re.IGNORECASE),
-                        re.compile(r"\bnuclos_state\s+ilike\s+'released'", re.IGNORECASE),
-                    ],
-                )
-            )
-
-        if _AC_RE.search(normalized_query):
-            intent.required_constraints.append(
-                SQLConstraint(
-                    name="prop_klimaanlage",
-                    description="Filter by Klimaanlage when requested.",
-                    patterns=[re.compile(r"\bprop_klimaanlage\b", re.IGNORECASE)],
-                )
-            )
-
-        if _WEIGHT_RE.search(normalized_query):
-            intent.required_constraints.append(
-                SQLConstraint(
-                    name="prop_gewicht",
-                    description="Use prop_gewicht for weight-related questions.",
-                    patterns=[re.compile(r"\bprop_gewicht\b", re.IGNORECASE)],
-                )
-            )
-
-        if _HEAVIEST_RE.search(normalized_query):
-            intent.required_constraints.append(
-                SQLConstraint(
-                    name="order_by_weight_desc",
-                    description="Order by prop_gewicht DESC for heaviest requests.",
-                    patterns=[re.compile(r"\border\s+by\s+prop_gewicht\s+desc\b", re.IGNORECASE)],
-                )
-            )
-
-        if _POWER_RE.search(normalized_query):
-            intent.required_constraints.append(
-                SQLConstraint(
-                    name="prop_motor_leistung",
-                    description="Use prop_motor_leistung for power-related questions.",
-                    patterns=[re.compile(r"\bprop_motor_leistung\b", re.IGNORECASE)],
-                )
-            )
-
-        if _WIDTH_RE.search(normalized_query):
-            intent.required_constraints.append(
-                SQLConstraint(
-                    name="width_columns",
-                    description="Use width columns (prop_einbaubreite_max or prop_arbeitsbreite).",
-                    patterns=[
-                        re.compile(r"\bprop_einbaubreite_max\b", re.IGNORECASE),
-                        re.compile(r"\bprop_arbeitsbreite\b", re.IGNORECASE),
-                        re.compile(r"\bprop_einbaubreite_grundbohle\b", re.IGNORECASE),
-                    ],
-                )
-            )
-
-        if manufacturer_matches:
-            for match in manufacturer_matches:
-                code = (match.get("code") or "").strip()
-                name = (match.get("name") or "").strip()
-                if not (code or name):
-                    continue
-                patterns = []
-                if code:
-                    patterns.append(re.compile(rf"\bhersteller_code\s*=\s*'{re.escape(code)}'\b", re.IGNORECASE))
-                    patterns.append(
-                        re.compile(rf"\bhersteller_code\s+in\s*\([^)]*'{re.escape(code)}'[^)]*\)", re.IGNORECASE)
+            if _SALES_RE.search(normalized_query):
+                intent.required_constraints.append(
+                    SQLConstraint(
+                        name="usage_sales",
+                        description="Filter to sales usage (VK).",
+                        patterns=[
+                            re.compile(r"\bverwendung_code\s*=\s*'VK'\b", re.IGNORECASE),
+                            re.compile(r"\bverwendung_code\s+in\s*\([^)]*'VK'[^)]*\)", re.IGNORECASE),
+                            re.compile(r"\bverwendung_name\s+ilike\s+'%verkauf%'", re.IGNORECASE),
+                            re.compile(r"\bibs_nuclet_geraete_verwendung\s+ilike\s+'%verkauf%'", re.IGNORECASE),
+                            re.compile(r"\bibs_nuclet_geraete_verwendung\s+like\s+'VK%'", re.IGNORECASE),
+                            re.compile(r"\bibs_nuclet_geraete_verwendung\s*=\s*'VK - Verkauf'\b", re.IGNORECASE),
+                        ],
                     )
-                if name:
-                    patterns.append(
-                        re.compile(rf"\bhersteller_name\s+ilike\s+'%{re.escape(name.lower())}%'", re.IGNORECASE)
+                )
+
+            if _AVAIL_RE.search(normalized_query):
+                intent.required_constraints.append(
+                    SQLConstraint(
+                        name="availability_released",
+                        description="Filter to released/available machines.",
+                        patterns=[
+                            re.compile(r"\bnuclos_state\s*=\s*'Released'\b", re.IGNORECASE),
+                            re.compile(r"\bnuclos_state\s+ilike\s+'released'", re.IGNORECASE),
+                            re.compile(r"\bibs_nuclet_geraete_nuclosstate\s*=\s*'Released'\b", re.IGNORECASE),
+                            re.compile(r"\bibs_nuclet_geraete_nuclosstate\s+ilike\s+'released'", re.IGNORECASE),
+                        ],
                     )
-                if patterns:
+                )
+
+            if _AC_RE.search(normalized_query):
+                intent.required_constraints.append(
+                    SQLConstraint(
+                        name="prop_klimaanlage",
+                        description="Filter by Klimaanlage when requested.",
+                        patterns=[
+                            re.compile(r"\bprop_klimaanlage\b", re.IGNORECASE),
+                            re.compile(r"\bprop_e1930_klimaanlage\b", re.IGNORECASE),
+                        ],
+                    )
+                )
+
+            if _WEIGHT_RE.search(normalized_query):
+                intent.required_constraints.append(
+                    SQLConstraint(
+                        name="prop_gewicht",
+                        description="Use prop_gewicht for weight-related questions.",
+                        patterns=[
+                            re.compile(r"\bprop_gewicht\b", re.IGNORECASE),
+                            re.compile(r"\bprop_e1730_gewicht_kg\b", re.IGNORECASE),
+                        ],
+                    )
+                )
+
+            if _HEAVIEST_RE.search(normalized_query):
+                intent.required_constraints.append(
+                    SQLConstraint(
+                        name="order_by_weight_desc",
+                        description="Order by prop_gewicht DESC for heaviest requests.",
+                        patterns=[re.compile(r"\border\s+by\s+prop_gewicht\s+desc\b", re.IGNORECASE)],
+                    )
+                )
+
+            if _POWER_RE.search(normalized_query):
+                intent.required_constraints.append(
+                    SQLConstraint(
+                        name="prop_motor_leistung",
+                        description="Use prop_motor_leistung for power-related questions.",
+                        patterns=[
+                            re.compile(r"\bprop_motor_leistung\b", re.IGNORECASE),
+                            re.compile(r"\bprop_e2180_motor_leistung_kw\b", re.IGNORECASE),
+                        ],
+                    )
+                )
+
+            if _WIDTH_RE.search(normalized_query):
+                intent.required_constraints.append(
+                    SQLConstraint(
+                        name="width_columns",
+                        description="Use width columns (prop_einbaubreite_max or prop_arbeitsbreite).",
+                        patterns=[
+                            re.compile(r"\bprop_einbaubreite_max\b", re.IGNORECASE),
+                            re.compile(r"\bprop_arbeitsbreite\b", re.IGNORECASE),
+                            re.compile(r"\bprop_einbaubreite_grundbohle\b", re.IGNORECASE),
+                            re.compile(r"\bprop_e1480_einbaubreite_max_m\b", re.IGNORECASE),
+                            re.compile(r"\bprop_e1470_einbaubreite_grundbohle_m\b", re.IGNORECASE),
+                            re.compile(r"\bprop_e1490_einbaubreite_mit_verbreiterungen_m\b", re.IGNORECASE),
+                            re.compile(r"\bprop_e1150_arbeitsbreite_mm\b", re.IGNORECASE),
+                        ],
+                    )
+                )
+
+            if manufacturer_matches:
+                for match in manufacturer_matches:
+                    code = (match.get("code") or "").strip()
+                    name = (match.get("name") or "").strip()
+                    if not (code or name):
+                        continue
+                    patterns = []
+                    if code:
+                        patterns.append(re.compile(rf"\bhersteller_code\s*=\s*'{re.escape(code)}'\b", re.IGNORECASE))
+                        patterns.append(
+                            re.compile(rf"\bhersteller_code\s+in\s*\([^)]*'{re.escape(code)}'[^)]*\)", re.IGNORECASE)
+                        )
+                    if name:
+                        patterns.append(
+                            re.compile(rf"\bhersteller_name\s+ilike\s+'%{re.escape(name.lower())}%'", re.IGNORECASE)
+                        )
+                    if patterns:
+                        intent.required_constraints.append(
+                            SQLConstraint(
+                                name=f"manufacturer_{code or name}",
+                                description=f"Filter by manufacturer {code or name}.",
+                                patterns=patterns,
+                            )
+                        )
+
+            if _FOLLOWUP_RE.search(normalized_query):
+                ids = list((thread_state or {}).get("last_result_ids") or [])
+                if ids:
+                    intent.followup_ids = ids
                     intent.required_constraints.append(
                         SQLConstraint(
-                            name=f"manufacturer_{code or name}",
-                            description=f"Filter by manufacturer {code or name}.",
-                            patterns=patterns,
+                            name="followup_ids",
+                            description="Restrict to previous result ids.",
+                            patterns=[re.compile(r"\bid\s+in\s*\(", re.IGNORECASE)],
                         )
                     )
 
-        if _FOLLOWUP_RE.search(normalized_query):
-            ids = list((thread_state or {}).get("last_result_ids") or [])
-            if ids:
-                intent.followup_ids = ids
+            if _TIME_RANGE_RE.search(normalized_query):
+                date_columns = self._guess_date_columns()
+                if date_columns:
+                    pattern = re.compile(
+                        r"\b(" + "|".join(re.escape(col.lower()) for col in date_columns) + r")\b",
+                        re.IGNORECASE,
+                    )
+                    intent.required_constraints.append(
+                        SQLConstraint(
+                            name="time_range",
+                            description="Apply time range filter on a date column.",
+                            patterns=[pattern],
+                        )
+                    )
+                else:
+                    intent.clarification = (
+                        "Welches Datumsfeld soll ich fuer den Zeitraum verwenden (created, updated, oder ein anderes)?"
+                    )
+
+            if _NULL_RE.search(normalized_query) and re.search(r"\bseriennummer\b", normalized_query):
                 intent.required_constraints.append(
                     SQLConstraint(
-                        name="followup_ids",
-                        description="Restrict to previous result ids.",
-                        patterns=[re.compile(r"\bid\s+in\s*\(", re.IGNORECASE)],
+                        name="serial_null",
+                        description="Handle missing serial numbers.",
+                        patterns=[
+                            re.compile(r"\bseriennummer\s+is\s+null\b", re.IGNORECASE),
+                            re.compile(r"\bseriennummer\s*=\s*''", re.IGNORECASE),
+                        ],
                     )
                 )
-
-        if _TIME_RANGE_RE.search(normalized_query):
-            date_columns = self._guess_date_columns()
-            if date_columns:
-                pattern = re.compile(
-                    r"\b(" + "|".join(re.escape(col.lower()) for col in date_columns) + r")\b",
-                    re.IGNORECASE,
-                )
-                intent.required_constraints.append(
-                    SQLConstraint(
-                        name="time_range",
-                        description="Apply time range filter on a date column.",
-                        patterns=[pattern],
-                    )
-                )
-            else:
-                intent.clarification = (
-                    "Welches Datumsfeld soll ich fuer den Zeitraum verwenden (created, updated, oder ein anderes)?"
-                )
-
-        if _NULL_RE.search(normalized_query) and re.search(r"\bseriennummer\b", normalized_query):
-            intent.required_constraints.append(
-                SQLConstraint(
-                    name="serial_null",
-                    description="Handle missing serial numbers.",
-                    patterns=[
-                        re.compile(r"\bseriennummer\s+is\s+null\b", re.IGNORECASE),
-                        re.compile(r"\bseriennummer\s*=\s*''", re.IGNORECASE),
-                    ],
-                )
-            )
 
         if self._should_clarify(normalized_query, intent, thread_state):
             intent.clarification = (
@@ -373,6 +446,8 @@ class SQLGuard:
         thread_state: Optional[Dict[str, Any]],
     ) -> bool:
         if intent.followup_ids or (thread_state or {}).get("last_result_ids"):
+            return False
+        if self._has_thread_context(thread_state) and _CONTEXT_REF_RE.search(normalized_query):
             return False
         if intent.request_type == "count":
             return False
@@ -422,27 +497,79 @@ class SQLGuard:
 
         for constraint in intent.required_constraints:
             if not constraint.is_satisfied(normalized_sql):
-                result.errors.append(f"Missing constraint: {constraint.name}")
+                # Downgrade constraint violations to warnings unless strict mode
+                if self._strict_validation:
+                    result.errors.append(f"Missing constraint: {constraint.name}")
+                else:
+                    result.warnings.append(f"Missing constraint: {constraint.name}")
 
         limit_value = self._extract_limit(normalized_sql)
         if limit_value is not None:
             result.limit_value = limit_value
             if intent.requested_limit and limit_value != intent.requested_limit:
-                result.errors.append(
-                    f"Incorrect limit: expected {intent.requested_limit}, got {limit_value}"
+                # Downgrade to warning - limit mismatch is not critical
+                result.warnings.append(
+                    f"Limit mismatch: expected {intent.requested_limit}, got {limit_value}"
                 )
         elif intent.requested_limit:
-            result.errors.append(f"Missing LIMIT {intent.requested_limit}")
+            result.warnings.append(f"Missing LIMIT {intent.requested_limit}")
 
         if intent.request_type == "count" and "count(" not in normalized_sql:
-            result.errors.append("Count query missing COUNT().")
+            # Downgrade to warning - the model might use a different approach
+            result.warnings.append("Count query might need COUNT().")
 
         if self._column_resolver:
-            allowed_columns = set(self._get_columns().keys())
+            allowed_columns = {name.lower() for name in self._get_columns().keys()}
             if allowed_columns:
-                unknown_cols = [col for col in columns if col not in allowed_columns]
-                if unknown_cols:
-                    result.warnings.append(f"Unknown columns: {', '.join(sorted(unknown_cols))}")
+                unknown_cols = []
+                for col in columns:
+                    if (col or "").lower() not in allowed_columns:
+                        unknown_cols.append(col)
+                unknown_prop_cols = [
+                    col for col in unknown_cols if (col or "").lower().startswith("prop_")
+                ]
+                other_unknown_cols = [
+                    col for col in unknown_cols if col not in unknown_prop_cols
+                ]
+                if unknown_prop_cols:
+                    for col in sorted(set(unknown_prop_cols)):
+                        # Try property resolver first
+                        resolved = None
+                        if self._property_resolver:
+                            try:
+                                resolved = self._property_resolver.resolve(col)
+                            except Exception:
+                                pass
+                        if resolved and resolved.lower() in allowed_columns:
+                            result.prop_column_suggestions[col] = resolved
+                            # Downgrade to warning (not error) - lenient mode
+                            result.warnings.append(
+                                f"Column '{col}' resolved to '{resolved}'"
+                            )
+                        else:
+                            suggestions = self._suggest_columns(
+                                (col or "").lower(),
+                                sorted(allowed_columns),
+                            )
+                            if suggestions:
+                                result.prop_column_suggestions[col] = suggestions[0]
+                                # Downgrade to warning unless strict mode
+                                if self._strict_validation:
+                                    result.errors.append(
+                                        "Unknown prop column: "
+                                        f"{col}. Did you mean: {', '.join(suggestions)}"
+                                    )
+                                else:
+                                    result.warnings.append(
+                                        f"Unknown prop column: {col}. Suggest: {', '.join(suggestions)}"
+                                    )
+                            else:
+                                # Unknown column without suggestions - warning only
+                                result.warnings.append(f"Unknown prop column: {col}")
+                if other_unknown_cols:
+                    result.warnings.append(
+                        f"Unknown columns: {', '.join(sorted(set(other_unknown_cols)))}"
+                    )
 
         if result.errors:
             result.ok = False
