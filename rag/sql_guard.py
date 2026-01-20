@@ -152,13 +152,11 @@ class SQLGuard:
         *,
         equipment_table: Optional[str],
         column_resolver: Optional[Callable[[], Dict[str, str]]] = None,
-        property_resolver: Optional[Any] = None,
         strict_validation: bool = False,
     ):
         self.equipment_table = equipment_table
         self._column_resolver = column_resolver
         self._cached_columns: Optional[Dict[str, str]] = None
-        self._property_resolver = property_resolver
         self._strict_validation = strict_validation
 
     def _get_columns(self) -> Dict[str, str]:
@@ -508,41 +506,22 @@ class SQLGuard:
                 other_unknown_cols = [
                     col for col in unknown_cols if col not in unknown_prop_cols
                 ]
+                # Column validation simplified - LLM uses ColumnCatalog for correct column names
                 if unknown_prop_cols:
                     for col in sorted(set(unknown_prop_cols)):
-                        # Try property resolver first
-                        resolved = None
-                        if self._property_resolver:
-                            try:
-                                resolved = self._property_resolver.resolve(col)
-                            except Exception:
-                                pass
-                        if resolved and resolved.lower() in allowed_columns:
-                            result.prop_column_suggestions[col] = resolved
-                            # Downgrade to warning (not error) - lenient mode
+                        suggestions = self._suggest_columns(
+                            (col or "").lower(),
+                            sorted(allowed_columns),
+                        )
+                        if suggestions:
+                            result.prop_column_suggestions[col] = suggestions[0]
+                            # Always warning, never error - LLM should have used ColumnCatalog
                             result.warnings.append(
-                                f"Column '{col}' resolved to '{resolved}'"
+                                f"Unknown prop column: {col}. Suggest: {', '.join(suggestions)}"
                             )
                         else:
-                            suggestions = self._suggest_columns(
-                                (col or "").lower(),
-                                sorted(allowed_columns),
-                            )
-                            if suggestions:
-                                result.prop_column_suggestions[col] = suggestions[0]
-                                # Downgrade to warning unless strict mode
-                                if self._strict_validation:
-                                    result.errors.append(
-                                        "Unknown prop column: "
-                                        f"{col}. Did you mean: {', '.join(suggestions)}"
-                                    )
-                                else:
-                                    result.warnings.append(
-                                        f"Unknown prop column: {col}. Suggest: {', '.join(suggestions)}"
-                                    )
-                            else:
-                                # Unknown column without suggestions - warning only
-                                result.warnings.append(f"Unknown prop column: {col}")
+                            # Unknown column without suggestions - warning only
+                            result.warnings.append(f"Unknown prop column: {col}")
                 if other_unknown_cols:
                     result.warnings.append(
                         f"Unknown columns: {', '.join(sorted(set(other_unknown_cols)))}"

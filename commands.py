@@ -7,6 +7,7 @@ import logging
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
 from rag.feedback import feedback_service
+from rag.admin_logger import admin_logger
 
 load_dotenv()
 
@@ -279,24 +280,58 @@ async def handle_feedback_command(body: dict, args: list, send_reply_func):
     feedback_text = " ".join(args)
 
     try:
-        # Store feedback linked to the user's most recent conversation
-        success = feedback_service.add_feedback(user_id=user_id, feedback=feedback_text)
+        # Store feedback in both systems (feedback_service is optional, admin_logger for dashboard)
+        feedback_success = feedback_service.add_feedback(user_id=user_id, feedback=feedback_text)
+        admin_success = admin_logger.add_feedback(ms_user_id=user_id, feedback=feedback_text)
 
-        if success:
+        # Success if either system stored the feedback
+        if feedback_success or admin_success:
             await send_reply_func(
                 body,
-                "✅ **Vielen Dank für dein Feedback!**\n\n"
-                f"📝 Dein Feedback: _{feedback_text}_\n\n"
-                "Wir schätzen deine Rückmeldung sehr. Sie hilft uns, den Bot kontinuierlich zu verbessern."
+                "**Danke für dein Feedback!**\n\n"
+                f"Dein Feedback: _{feedback_text}_\n\n"
+                "Deine Rückmeldung hilft uns, den Bot zu verbessern."
             )
+
+            # Extract and save learned rule from feedback (async, non-blocking)
+            try:
+                from rag.learned_rules import learned_rules_service
+
+                logger.info(f"[RuleExtraction] Starting for user {user_id[:20]}...")
+
+                recent = admin_logger.get_most_recent_conversation(user_id)
+                if not recent:
+                    logger.warning(f"[RuleExtraction] No recent conversation found for user {user_id[:20]}")
+                else:
+                    logger.info(f"[RuleExtraction] Found context: Q='{recent['user_question'][:50]}...'")
+
+                    rule = await learned_rules_service.extract_rule_from_feedback(
+                        question=recent['user_question'],
+                        response=recent['assistant_response'],
+                        feedback=feedback_text
+                    )
+
+                    if not rule:
+                        logger.info(f"[RuleExtraction] No rule extracted (LLM returned None)")
+                    elif not rule.get('is_actionable'):
+                        logger.info(f"[RuleExtraction] Rule not actionable: {rule.get('rule_text', 'N/A')[:50]}")
+                    else:
+                        saved = learned_rules_service.save_rule(rule)
+                        if saved:
+                            logger.info(f"[RuleExtraction] SUCCESS - Rule saved: {rule.get('rule_text', '')[:50]}...")
+                        else:
+                            logger.warning(f"[RuleExtraction] Rule extracted but save FAILED (duplicate or DB error)")
+            except Exception as rule_error:
+                # Don't fail the feedback command if rule extraction fails
+                logger.warning(f"[RuleExtraction] Exception: {rule_error}")
         else:
             await send_reply_func(
                 body,
-                "⚠️ **Feedback konnte nicht gespeichert werden.**\n\n"
+                "**Feedback konnte nicht gespeichert werden.**\n\n"
                 "Mögliche Gründe:\n"
-                "• Kein vorheriges Gespräch gefunden\n"
-                "• Du hast bereits Feedback zur letzten Antwort gegeben\n\n"
-                "💡 Stelle zuerst eine Frage an den Bot und gib dann Feedback."
+                "- Kein vorheriges Gespräch gefunden\n"
+                "- Du hast bereits Feedback zur letzten Antwort gegeben\n\n"
+                "Stelle zuerst eine Frage an den Bot und gib dann Feedback."
             )
 
     except Exception as e:

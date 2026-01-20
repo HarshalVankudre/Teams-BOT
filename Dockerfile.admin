@@ -1,0 +1,20 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install dependencies
+RUN pip install --no-cache-dir flask psycopg2-binary python-dotenv gunicorn
+
+# Copy only admin_logger.py (avoid importing full rag package)
+COPY rag/admin_logger.py /app/admin_logger.py
+
+# Copy admin dashboard
+COPY admin_dashboard/ /app/admin_dashboard/
+
+WORKDIR /app/admin_dashboard
+
+# Expose port (App Runner uses 8080)
+EXPOSE 8080
+
+# Run with gunicorn for production
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "2", "dashboard:app"]

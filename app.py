@@ -1,12 +1,12 @@
 """
-Microsoft Teams Bot Backend with OpenAI Responses API
+Microsoft Teams Bot Backend with Single Agent RAG
 
-Improvements:
+Features:
 - Token caching for Bot Framework authentication
 - HTTP connection pooling for better performance
 - Redis for persistent conversation storage (per-user isolation)
 - Graceful fallback to in-memory storage if Redis unavailable
-- Custom RAG with Pinecone vector database
+- Single Agent RAG with Pinecone + PostgreSQL
 """
 import os
 import asyncio
@@ -14,22 +14,21 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from fastapi import FastAPI, Request, Response
-from openai import AsyncOpenAI
 import httpx
 import redis.asyncio as redis
 from dotenv import load_dotenv
 from commands import handle_command
 import time
 
-# Custom RAG imports
+# RAG imports
 from rag.search import RAGSearch
 from rag.feedback import feedback_service
+from rag.admin_logger import admin_logger
 
 # Load environment variables from .env file
 load_dotenv()
 
 # Configuration
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 BOT_APP_ID = os.getenv("BOT_APP_ID", "")
 BOT_APP_PASSWORD = os.getenv("BOT_APP_PASSWORD", "")
 AZURE_TENANT_ID = os.getenv("AZURE_TENANT_ID", "")  # Required for single-tenant apps
@@ -39,71 +38,84 @@ OPENAI_MODEL = os.getenv("OPENAI_MODEL")
 REASONING_EFFORT = os.getenv("REASONING_EFFORT")
 if not OPENAI_MODEL or not REASONING_EFFORT:
     raise ValueError("OPENAI_MODEL and REASONING_EFFORT must be set in .env file")
-VECTOR_STORE_ID = os.getenv("VECTOR_STORE_ID", "")
 # Redis configuration
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 CONVERSATION_TTL_HOURS = int(os.getenv("CONVERSATION_TTL_HOURS", "24"))
 
-# RAG and Agent System configuration
-USE_CUSTOM_RAG = os.getenv("USE_CUSTOM_RAG", "true").lower() == "true"
-USE_AGENT_SYSTEM = os.getenv("USE_AGENT_SYSTEM", "true").lower() == "true"
+# Agent configuration
 AGENT_VERBOSE = os.getenv("AGENT_VERBOSE", "false").lower() == "true"
 
-SYSTEM_INSTRUCTIONS = os.getenv("SYSTEM_INSTRUCTIONS", """Du bist der RÜKO AI-Assistent mit Zugriff auf interne Datenbanken und ergänzende Web-Suche.
+SYSTEM_INSTRUCTIONS = os.getenv("SYSTEM_INSTRUCTIONS", """Du bist der RUEKO AI-Assistent mit Zugriff auf interne Daten (SQL und Pinecone).
 
-DATENPRIORITÄT (WICHTIG):
-1. INTERNE DATEN haben IMMER Vorrang:
-   - Dokumentendatenbank (rueko-documents): Unternehmensrichtlinien, Anleitungen, Prozesse
-   - Maschinendatenbank (machinery-data): 2.395 Baumaschinen mit technischen Daten
-2. Web-Suche (Tavily) ist NUR ERGÄNZEND für aktuelle Preise, externe Spezifikationen
-3. Bei Widersprüchen: Interne Daten sind IMMER maßgeblich
+DATENPRIORITAET (WICHTIG):
+1. SQL-Datenbank: strukturierte Maschinen- und Ausstattungsdaten.
+2. Pinecone-Dokumente: Handbuecher, Anleitungen, Richtlinien.
+3. Keine Web-Suche und kein externes Wissen.
 
 KERNREGELN:
-1. Durchsuche und nutze IMMER zuerst die internen Datenbanken
-2. Zitiere Quellen: "Laut [interner Quelle]..." oder "Laut [Web-Quelle]..."
-3. Web-Informationen nur als Ergänzung, nie als Hauptquelle
+1. Antworte ausschliesslich auf Basis interner Daten (SQL + Pinecone).
+2. Zitiere Quellen nur wenn der Nutzer explizit danach fragt.
+3. Wenn interne Daten fehlen: sage das freundlich und stelle eine Rueckfrage.
+4. Erfinde NIEMALS Informationen.
 
-MASCHINENFRAGEN:
-- Gib ALLE verfügbaren technischen Details aus der internen Datenbank
-- Seriennummer/Inventarnummer: Zeige alle gespeicherten Eigenschaften
-- Empfehlungen: Basierend auf Arbeitsbreite, Leistung, Einsatzgebiet aus internen Daten
-- Verfügbarkeit: "Vermietung" oder "Verkauf" aus Maschinendatenbank
+TON & STIL (FREUNDLICH):
+- Beginne mit kurzer Bestaetigung: "Gerne!" / "Das habe ich gefunden:" / "Klar!"
+- Nutze "Sie" (formell) aber warmherzig - nicht steif oder roboterhaft
+- Bei leeren Ergebnissen: empathisch formulieren, Alternativen vorschlagen
+- VERMEIDE: Kalte Aufzaehlungen ohne Kontext, abrupte Antworten
 
-ANTWORTLÄNGE:
-- Einfache Fragen: 2-4 Sätze
-- Maschinendaten: Vollständige strukturierte Liste
-- Komplexe Fragen: max. 500 Wörter, mit Aufzählungen
+EMOJIS (DEZENT - max 1-2 pro Antwort):
+- Erfolg/Gefunden: verwende ein Haekchen
+- Maschinen/Geraete: verwende Werkzeug oder Traktor Symbol
+- Listen/Anzahl: verwende Klemmbrett Symbol
+- Hinweis/Tipp: verwende Gluehbirne Symbol
+- NICHT uebertreiben: Nie am Satzende haeufen
 
-FORMAT:
-- Direkte Antwort zuerst
-- Technische Daten in übersichtlichen Listen
-- Quellenangabe am Ende (intern vs. web kennzeichnen)
+FORMAT (TEAMS-OPTIMIERT):
+- Nutze **fettgedruckte Labels** fuer wichtige Werte: "**Hersteller:** Bomag"
+- Listen mit klarer Struktur und Bulletpoints (max 5-7)
+- Trenne Abschnitte mit einer Leerzeile
+- Bei mehreren Maschinen: Nummerierte Liste
+- Kurze Zusammenfassung ZUERST, dann Details
+
+FOLLOW-UP TIPPS (PROAKTIV):
+- Bei Ergebnislisten: "Soll ich Details zu einer Maschine zeigen?"
+- Bei Empfehlungen: "Moechten Sie Alternativen sehen?"
+- Bei technischen Fragen: "Brauchen Sie das Handbuch dazu?"
+- Bei 0 Ergebnissen: "Soll ich die Kriterien anpassen?" + konkrete Vorschlaege
+- Nicht bei JEDER Antwort - nur wenn sinnvoll (komplexe Themen, Listen)
+
+ANTWORTZIEL:
+- Antworte auf die konkrete Frage mit Kontext
+- Wenn etwas unklar ist: freundlich eine Rueckfrage stellen
+- Standard: 2-5 Saetze oder 5-7 Bulletpoints
+- Laengere Antworten nur auf ausdrueckliche Bitte
+
+BEISPIEL-ANTWORT:
+"Gerne! Ich habe **3 passende Kettenfertiger** gefunden:
+
+1. **Super 1800-3** (Voegele) - Einbaubreite bis 9.0m, Miete
+2. **Super 2100-3** (Voegele) - Einbaubreite bis 11.5m, Miete
+3. **BF 600 C** (Bomag) - Einbaubreite bis 6.0m, Verkauf
+
+Soll ich technische Details oder die Verfuegbarkeit pruefen?"
 
 WENN KEINE INTERNEN DATEN:
-"In den internen Datenbanken wurde keine Information gefunden." + ggf. Web-Ergänzung
-
-Erfinde NIEMALS Informationen. Interne Daten = Wahrheit.""")
+"Leider habe ich dazu keine Informationen in den internen Datenbanken gefunden. Moechten Sie die Suche mit anderen Kriterien versuchen?"
+""")
 
 # Debug output
 print(f"Bot App ID loaded: {BOT_APP_ID[:10]}..." if BOT_APP_ID else "Bot App ID NOT loaded!")
 print(f"Bot Password loaded: {'Yes' if BOT_APP_PASSWORD else 'No'}")
-print(f"OpenAI API Key loaded: {'Yes' if OPENAI_API_KEY else 'No'}")
 print(f"Model: {OPENAI_MODEL}")
 print(f"Reasoning Effort: {REASONING_EFFORT}")
-print(f"Vector Store ID: {VECTOR_STORE_ID}")
 print(f"Redis URL: {REDIS_URL[:50]}..." if len(REDIS_URL) > 50 else f"Redis URL: {REDIS_URL}")
 print(f"Conversation TTL: {CONVERSATION_TTL_HOURS} hours")
-print(f"Custom RAG (Pinecone): {'Enabled' if USE_CUSTOM_RAG else 'Disabled'}")
-print(f"Agent System: {'Enabled' if USE_AGENT_SYSTEM else 'Disabled'}")
 print(f"Agent Verbose: {'Enabled' if AGENT_VERBOSE else 'Disabled'}")
 
-# Initialize async OpenAI client for streaming
-client = AsyncOpenAI(api_key=OPENAI_API_KEY)
-
-# Initialize custom RAG search (if enabled) - Redis client added after startup
+# Initialize RAG search - Redis client added after startup
 rag_search = None  # Initialized in lifespan after Redis is available
-if USE_CUSTOM_RAG:
-    print("Custom RAG will be initialized with Pinecone")
+print("RAG Search will be initialized with Pinecone")
 
 # Token caching for Bot Framework authentication
 @dataclass
@@ -149,12 +161,11 @@ async def lifespan(app: FastAPI):
 
     # Initialize RAG search with Redis client for conversation context
     global rag_search
-    if USE_CUSTOM_RAG:
-        redis_client = None
-        if app.state.redis_available and app.state.redis_pool:
-            redis_client = redis.Redis(connection_pool=app.state.redis_pool)
-        rag_search = RAGSearch(redis_client=redis_client)
-        print(f"[OK] RAG Search initialized (Agent System: {USE_AGENT_SYSTEM})")
+    redis_client = None
+    if app.state.redis_available and app.state.redis_pool:
+        redis_client = redis.Redis(connection_pool=app.state.redis_pool)
+    rag_search = RAGSearch(redis_client=redis_client)
+    print("[OK] RAG Search initialized")
 
     yield  # Application runs here
 
@@ -242,6 +253,9 @@ async def clear_all_conversations(request: Request):
 @app.get("/")
 async def root():
     return {"status": "ok", "message": "Teams Bot is running"}
+
+
+
 
 
 @app.get("/health")
@@ -368,7 +382,7 @@ async def messages(request: Request):
 
                 try:
                     # Get response from Agent System
-                    assistant_response = await get_assistant_response_streaming(
+                    assistant_response, result_metadata = await get_assistant_response_streaming(
                         request, thread_key, user_message,
                         user_id=user_id, user_name=user_name
                     )
@@ -381,7 +395,6 @@ async def messages(request: Request):
 
                 # Store conversation in feedback database
                 try:
-                    data_source = "agent_system" if USE_AGENT_SYSTEM else ("custom_rag" if USE_CUSTOM_RAG else "openai_file_search")
                     feedback_service.save_conversation(
                         user_id=user_id,
                         user_message=user_message,
@@ -390,11 +403,26 @@ async def messages(request: Request):
                         user_email=user_email,
                         conversation_thread_id=thread_key,
                         response_time_ms=response_time_ms,
-                        query_type=None,  # Could be determined by RAG system
-                        data_source=data_source
+                        query_type=None,
+                        data_source="single_agent"
                     )
                 except Exception as fb_error:
                     print(f"[Feedback] Error storing conversation: {fb_error}")
+
+                # Store in admin dashboard database
+                try:
+                    admin_logger.log_conversation(
+                        thread_id=thread_key,
+                        ms_user_id=user_id,
+                        user_message=user_message,
+                        assistant_response=assistant_response,
+                        user_name=user_name,
+                        user_email=user_email,
+                        response_time_ms=response_time_ms,
+                        logs=result_metadata.get("logs") if result_metadata else None
+                    )
+                except Exception as admin_error:
+                    print(f"[AdminLogger] Error: {admin_error}")
 
                 # Send reply back to Teams
                 await send_reply(
@@ -425,7 +453,7 @@ async def messages(request: Request):
                         reply_to_id=body.get("id"),
                         recipient=body.get("from"),
                         from_bot=body.get("recipient"),
-                        message="Hallo! Ich bin der RÜKO AI Assistant. Wie kann ich Ihnen helfen?"
+                        message="Hallo! Ich bin der RUEKO AI Assistant. Ich helfe Ihnen gerne bei Fragen zu Maschinen, Verfuegbarkeiten und technischen Dokumenten. Was kann ich fuer Sie tun?"
                     )
         
         return Response(status_code=200)
@@ -498,9 +526,9 @@ async def get_custom_rag_response(
     user_message: str,
     user_id: str = None,
     user_name: str = None
-) -> str:
-    """Get response using the Agent System with conversation continuity"""
-    print(f"Using Agent System (Agent System: {USE_AGENT_SYSTEM})...")
+) -> tuple[str, dict]:
+    """Get response using the Single Agent with conversation continuity"""
+    print("Using Single Agent...")
 
     try:
         # Get previous response ID for conversation continuity (fallback mode)
@@ -539,20 +567,20 @@ async def get_custom_rag_response(
         sources = result.get("sources", [])
         if sources and query_type == "fallback":
             response += "\n\n---\n**Quellen:**"
-            for source in sources[:3]:
+            for source in sources[:2]:
                 score_pct = source.get("score", 0)
                 if isinstance(score_pct, float) and score_pct <= 1:
                     score_pct = score_pct * 100
                 response += f"\n- {source.get('title', 'Unbekannt')} ({source.get('source_file', '')}) [{score_pct:.0f}%]"
 
         print(f"Response generated using {result.get('chunks_used', 0)} sources")
-        return response
+        return response, result
 
     except Exception as e:
         print(f"Agent System error: {e}")
         import traceback
         traceback.print_exc()
-        return f"Fehler bei der Verarbeitung: {str(e)}"
+        return f"Fehler bei der Verarbeitung: {str(e)}", {}
 
 
 async def get_assistant_response_streaming(
@@ -561,142 +589,12 @@ async def get_assistant_response_streaming(
     user_message: str,
     user_id: str = None,
     user_name: str = None
-) -> str:
-    """Get response from Agent System or fallback to OpenAI Responses API"""
-
-    # Use Agent System / Custom RAG if enabled
-    if USE_CUSTOM_RAG and rag_search:
-        return await get_custom_rag_response(
-            request, thread_key, user_message,
-            user_id=user_id, user_name=user_name
-        )
-
-    # Fallback to OpenAI file_search
-    try:
-        # Check if we have a previous response ID for this conversation (from Redis or memory)
-        previous_response_id = await get_conversation_id(request, thread_key)
-
-        if previous_response_id:
-            print(f"Continuing conversation for {thread_key} with previous_response_id: {previous_response_id}")
-        else:
-            print(f"Starting new conversation for {thread_key}")
-
-        # Create streaming response using the Responses API with file_search tool
-        print("Starting streaming response...")
-
-        stream = await client.responses.create(
-            model=OPENAI_MODEL,
-            reasoning={"effort": REASONING_EFFORT},  # GPT-5.1 adaptive reasoning
-            instructions=SYSTEM_INSTRUCTIONS,
-            input=user_message,
-            previous_response_id=previous_response_id,
-            store=True,  # Required for multi-turn conversations - keeps context
-            max_output_tokens=800,  # Reduced for concise responses
-            tools=[{
-                "type": "file_search",
-                "vector_store_ids": [VECTOR_STORE_ID],
-                "max_num_results": 20,  # Get more results for better context
-                "ranking_options": {
-                    "ranker": "auto",
-                    "score_threshold": 0.0  # Include all results, let model decide
-                }
-            }],
-            stream=True,  # Enable streaming
-        )
-
-        # Accumulate the response text from stream events
-        accumulated_text = ""
-        response_id = None
-        file_search_triggered = False
-
-        async for event in stream:
-            # Capture response ID for conversation continuity
-            if hasattr(event, 'response') and event.response and hasattr(event.response, 'id'):
-                response_id = event.response.id
-
-            # Handle different event types
-            if event.type == "response.output_text.delta":
-                # Accumulate text deltas
-                if hasattr(event, 'delta'):
-                    accumulated_text += event.delta
-                    # Print progress indicator
-                    print(".", end="", flush=True)
-
-            elif event.type == "response.file_search_call.in_progress":
-                print("\n  File search in progress...")
-                file_search_triggered = True
-
-            elif event.type == "response.file_search_call.done":
-                print("  File search completed!")
-
-            elif event.type == "response.completed":
-                # Get final response ID from completed event
-                if hasattr(event, 'response') and event.response:
-                    response_id = event.response.id
-                    print(f"\nStreaming completed. Response ID: {response_id}")
-
-        print()  # New line after dots
-
-        # Store the response ID for future turns (in Redis or memory)
-        if response_id:
-            await store_conversation_id(request, thread_key, response_id)
-            print(f"Response ID stored for {thread_key}: {response_id}")
-
-        if file_search_triggered:
-            print("  File search was used for this response")
-
-        if accumulated_text:
-            return accumulated_text
-
-        return "Keine Antwort erhalten."
-
-    except Exception as e:
-        print(f"Error getting streaming response: {e}")
-        # If the error is related to previous_response_id, try without it
-        if "previous_response_id" in str(e).lower():
-            print(f"Retrying without previous_response_id for {thread_key}")
-            try:
-                # Clear the stored response and retry
-                await delete_conversation_id(request, thread_key)
-                stream = await client.responses.create(
-                    model=OPENAI_MODEL,
-                    reasoning={"effort": REASONING_EFFORT},  # GPT-5.1 adaptive reasoning
-                    instructions=SYSTEM_INSTRUCTIONS,
-                    input=user_message,
-                    store=True,
-                    max_output_tokens=800,
-                    tools=[{
-                        "type": "file_search",
-                        "vector_store_ids": [VECTOR_STORE_ID],
-                        "max_num_results": 20,
-                        "ranking_options": {
-                            "ranker": "auto",
-                            "score_threshold": 0.0
-                        }
-                    }],
-                    stream=True,
-                )
-
-                accumulated_text = ""
-                response_id = None
-                async for event in stream:
-                    if hasattr(event, 'response') and event.response and hasattr(event.response, 'id'):
-                        response_id = event.response.id
-                    if event.type == "response.output_text.delta" and hasattr(event, 'delta'):
-                        accumulated_text += event.delta
-                    elif event.type == "response.completed" and hasattr(event, 'response'):
-                        response_id = event.response.id
-
-                if response_id:
-                    await store_conversation_id(request, thread_key, response_id)
-
-                if accumulated_text:
-                    return accumulated_text
-
-            except Exception as retry_error:
-                print(f"Retry also failed: {retry_error}")
-                return f"Fehler: {str(retry_error)}"
-        return f"Fehler: {str(e)}"
+) -> tuple[str, dict]:
+    """Get response from Single Agent"""
+    return await get_custom_rag_response(
+        request, thread_key, user_message,
+        user_id=user_id, user_name=user_name
+    )
 
 
 async def get_bot_token(request: Request = None) -> str:

@@ -1,6 +1,14 @@
 """
 Feedback Service for Teams Bot
 Stores all conversations and user feedback in a separate PostgreSQL database.
+
+Configure via env vars (optional; disabled unless explicitly configured):
+- FEEDBACK_POSTGRES_DB (required to enable)
+- FEEDBACK_POSTGRES_PASSWORD (required to enable)
+- FEEDBACK_POSTGRES_HOST / FEEDBACK_POSTGRES_PORT / FEEDBACK_POSTGRES_USER (optional overrides)
+
+Falls back to POSTGRES_HOST/POSTGRES_PORT/POSTGRES_USER if the FEEDBACK_* variants
+aren't set.
 """
 import os
 from datetime import datetime
@@ -19,17 +27,48 @@ except ImportError:
 @dataclass
 class FeedbackConfig:
     """Configuration for feedback database (separate from SEMA database)"""
-    host: str = os.getenv("POSTGRES_HOST", "localhost")
-    port: str = os.getenv("POSTGRES_PORT", "5432")
-    database: str = "teams_feedback"  # Separate database for feedback
-    user: str = os.getenv("POSTGRES_USER", "postgres")
-    password: str = os.getenv("POSTGRES_PASSWORD", "")
+    host: str
+    port: str
+    database: str
+    user: str
+    password: str
+
+    @classmethod
+    def from_env(cls) -> "FeedbackConfig":
+        return cls(
+            host=os.getenv("FEEDBACK_POSTGRES_HOST") or os.getenv("POSTGRES_HOST", ""),
+            port=os.getenv("FEEDBACK_POSTGRES_PORT") or os.getenv("POSTGRES_PORT", ""),
+            database=os.getenv("FEEDBACK_POSTGRES_DB", ""),
+            user=os.getenv("FEEDBACK_POSTGRES_USER") or os.getenv("POSTGRES_USER", ""),
+            password=os.getenv("FEEDBACK_POSTGRES_PASSWORD", ""),
+        )
+
+    def validate(self) -> Optional[str]:
+        missing = []
+        if not self.host:
+            missing.append("FEEDBACK_POSTGRES_HOST (or POSTGRES_HOST)")
+        if not self.port:
+            missing.append("FEEDBACK_POSTGRES_PORT (or POSTGRES_PORT)")
+        if not self.database:
+            missing.append("FEEDBACK_POSTGRES_DB")
+        if not self.user:
+            missing.append("FEEDBACK_POSTGRES_USER (or POSTGRES_USER)")
+        if not self.password:
+            missing.append("FEEDBACK_POSTGRES_PASSWORD")
+
+        if missing:
+            return f"Missing required feedback Postgres env vars: {', '.join(missing)}"
+
+        if not str(self.port).isdigit():
+            return "Invalid feedback Postgres port (must be numeric)"
+
+        return None
 
     def to_dict(self) -> Dict[str, str]:
         return {
             "host": self.host,
             "port": self.port,
-            "database": self.database,
+            "dbname": self.database,
             "user": self.user,
             "password": self.password
         }
@@ -43,8 +82,9 @@ class FeedbackService:
     """
 
     def __init__(self, config: Optional[FeedbackConfig] = None):
-        self.config = config or FeedbackConfig()
-        self.available = POSTGRES_AVAILABLE and bool(self.config.password)
+        self.config = config or FeedbackConfig.from_env()
+        config_error = self.config.validate()
+        self.available = POSTGRES_AVAILABLE and (config_error is None)
 
         if self.available:
             try:
@@ -59,10 +99,13 @@ class FeedbackService:
                 print(f"[Feedback] Connection failed: {e}")
                 self.available = False
         else:
-            print("[Feedback] Service not available (missing credentials or psycopg2)")
+            reason = config_error or "psycopg2 not installed"
+            print(f"[Feedback] Service not available ({reason})")
 
     def _get_connection(self):
         """Get database connection"""
+        if not self.available:
+            raise RuntimeError("FeedbackService not available")
         return psycopg2.connect(**self.config.to_dict())
 
     def save_conversation(

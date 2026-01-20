@@ -22,24 +22,13 @@ class RAGConfig:
         AGENT_VERIFICATION_MODEL: Model for SQL verification (empty = use main model)
     """
 
-    # LLM Provider: "openai" or "gemini"
-    llm_provider: str = os.getenv("LLM_PROVIDER", "openai")
-
     # OpenAI Settings
     openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
-    openai_model: str = os.getenv("OPENAI_MODEL", "")  # e.g., gpt-5, gpt-4o
+    openai_model: str = os.getenv("OPENAI_MODEL", "")  # e.g., gpt-4o, gpt-4o-mini
     openai_reasoning: str = os.getenv("REASONING_EFFORT", "")  # none, low, medium, high
 
-    # Gemini Settings
-    gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
-    gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
-    gemini_reasoning: str = os.getenv("GEMINI_REASONING", "low")  # none, low, medium, high
-
-    # Resolved model (based on provider)
     @property
     def response_model(self) -> str:
-        if self.llm_provider == "gemini":
-            return self.gemini_model
         return self.openai_model
 
     @property
@@ -98,22 +87,11 @@ class RAGConfig:
         """Validate required configuration"""
         errors = []
 
-        # Validate provider-specific settings
-        if self.llm_provider == "openai":
-            if not self.openai_api_key:
-                errors.append("OPENAI_API_KEY is required when LLM_PROVIDER=openai")
-            if not self.openai_model:
-                errors.append("OPENAI_MODEL is required when LLM_PROVIDER=openai")
-        elif self.llm_provider == "gemini":
-            if not self.gemini_api_key:
-                errors.append("GEMINI_API_KEY is required when LLM_PROVIDER=gemini")
-            if not self.gemini_model:
-                errors.append("GEMINI_MODEL is required when LLM_PROVIDER=gemini")
-            # OpenAI still needed for embeddings
-            if not self.openai_api_key:
-                errors.append("OPENAI_API_KEY is required for embeddings")
-        else:
-            errors.append(f"Invalid LLM_PROVIDER: {self.llm_provider}. Use 'openai' or 'gemini'")
+        # OpenAI is required
+        if not self.openai_api_key:
+            errors.append("OPENAI_API_KEY is required")
+        if not self.openai_model:
+            errors.append("OPENAI_MODEL is required")
 
         # Pinecone is always required
         if not self.pinecone_api_key:
@@ -126,10 +104,6 @@ class RAGConfig:
             errors.append("TAVILY_API_KEY is required when ENABLE_WEB_SEARCH=true")
 
         return errors
-
-    def is_gemini(self) -> bool:
-        """Check if using Gemini provider"""
-        return self.llm_provider.lower() == "gemini"
 
 
 # Global config instance

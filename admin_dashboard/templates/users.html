@@ -1,0 +1,172 @@
+{% extends "base.html" %}
+
+{% block title %}Benutzer{% endblock %}
+
+{% block content %}
+<h1>Benutzer</h1>
+
+<div class="search-bar">
+    <form method="get" action="{{ url_for('users') }}">
+        <input type="text" name="search" placeholder="Suchen nach Name oder E-Mail..." value="{{ search }}">
+        <button type="submit">Suchen</button>
+        {% if search %}
+        <a href="{{ url_for('users') }}" class="clear-search">Zurucksetzen</a>
+        {% endif %}
+    </form>
+</div>
+
+{% if users %}
+<table class="data-table">
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>E-Mail</th>
+            <th>Gesprache</th>
+            <th>Nachrichten</th>
+            <th>Erste Aktivitat</th>
+            <th>Letzte Aktivitat</th>
+            <th class="actions-col">Aktionen</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for user in users %}
+        <tr>
+            <td class="clickable-cell" onclick="window.location='{{ url_for('user_conversations', user_id=user.id) }}'">
+                <strong>{{ user.display_name or 'Unbekannt' }}</strong>
+            </td>
+            <td class="clickable-cell" onclick="window.location='{{ url_for('user_conversations', user_id=user.id) }}'">
+                {{ user.email or '-' }}
+            </td>
+            <td class="center clickable-cell" onclick="window.location='{{ url_for('user_conversations', user_id=user.id) }}'">
+                {{ user.conversation_count or 0 }}
+            </td>
+            <td class="center clickable-cell" onclick="window.location='{{ url_for('user_conversations', user_id=user.id) }}'">
+                {{ user.message_count or 0 }}
+            </td>
+            <td class="clickable-cell" onclick="window.location='{{ url_for('user_conversations', user_id=user.id) }}'">
+                {{ user.first_seen|format_datetime }}
+            </td>
+            <td class="clickable-cell" onclick="window.location='{{ url_for('user_conversations', user_id=user.id) }}'">
+                {{ user.last_active|format_datetime }}
+            </td>
+            <td class="actions-cell">
+                <button class="btn btn-warning btn-sm" onclick="deleteUserConversations({{ user.id }}, '{{ user.display_name|default('Unbekannt') }}', {{ user.conversation_count or 0 }})" title="Alle Gesprache loschen">
+                    🗑️
+                </button>
+                <button class="btn btn-danger btn-sm" onclick="deleteUser({{ user.id }}, '{{ user.display_name|default('Unbekannt') }}')" title="Benutzer loschen">
+                    ❌
+                </button>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+<div class="pagination">
+    {% if page > 1 %}
+    <a href="{{ url_for('users', page=page-1, search=search) }}">&laquo; Zuruck</a>
+    {% endif %}
+    <span>Seite {{ page }} von {{ total_pages }}</span>
+    {% if page < total_pages %}
+    <a href="{{ url_for('users', page=page+1, search=search) }}">Weiter &raquo;</a>
+    {% endif %}
+</div>
+{% else %}
+<p class="empty">Keine Benutzer gefunden</p>
+{% endif %}
+
+<!-- Delete Conversations Modal -->
+<div id="deleteConvModal" class="modal" style="display: none;">
+    <div class="modal-content">
+        <h3>Alle Gespräche löschen?</h3>
+        <p id="deleteConvModalText"></p>
+        <p class="warning-text">Diese Aktion kann nicht rückgängig gemacht werden.</p>
+        <div class="modal-actions">
+            <button class="btn btn-secondary" onclick="closeConvModal()">Abbrechen</button>
+            <button class="btn btn-danger" id="confirmDeleteConvBtn">Alle löschen</button>
+        </div>
+    </div>
+</div>
+
+<!-- Delete User Modal -->
+<div id="deleteUserModal" class="modal" style="display: none;">
+    <div class="modal-content">
+        <h3>Benutzer löschen?</h3>
+        <p id="deleteUserModalText"></p>
+        <p class="warning-text">Der Benutzer und alle seine Gespräche werden gelöscht. Diese Aktion kann nicht rückgängig gemacht werden.</p>
+        <div class="modal-actions">
+            <button class="btn btn-secondary" onclick="closeUserModal()">Abbrechen</button>
+            <button class="btn btn-danger" id="confirmDeleteUserBtn">Benutzer löschen</button>
+        </div>
+    </div>
+</div>
+
+<script>
+let deleteUserId = null;
+let deleteConvUserId = null;
+
+function deleteUserConversations(userId, name, count) {
+    deleteConvUserId = userId;
+    document.getElementById('deleteConvModalText').textContent =
+        'Möchten Sie alle ' + count + ' Gespräche von "' + name + '" löschen?';
+    document.getElementById('deleteConvModal').style.display = 'flex';
+}
+
+function closeConvModal() {
+    document.getElementById('deleteConvModal').style.display = 'none';
+    deleteConvUserId = null;
+}
+
+document.getElementById('confirmDeleteConvBtn').onclick = function() {
+    if (deleteConvUserId) {
+        fetch('/api/users/' + deleteConvUserId + '/conversations', { method: 'DELETE' })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    window.location.reload();
+                } else {
+                    alert('Fehler: ' + data.message);
+                }
+            })
+            .catch(err => alert('Fehler: ' + err));
+    }
+    closeConvModal();
+};
+
+function deleteUser(userId, name) {
+    deleteUserId = userId;
+    document.getElementById('deleteUserModalText').textContent =
+        'Möchten Sie den Benutzer "' + name + '" wirklich löschen?';
+    document.getElementById('deleteUserModal').style.display = 'flex';
+}
+
+function closeUserModal() {
+    document.getElementById('deleteUserModal').style.display = 'none';
+    deleteUserId = null;
+}
+
+document.getElementById('confirmDeleteUserBtn').onclick = function() {
+    if (deleteUserId) {
+        fetch('/api/users/' + deleteUserId, { method: 'DELETE' })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    window.location.reload();
+                } else {
+                    alert('Fehler: ' + data.message);
+                }
+            })
+            .catch(err => alert('Fehler: ' + err));
+    }
+    closeUserModal();
+};
+
+// Close modals on outside click
+document.getElementById('deleteConvModal').onclick = function(e) {
+    if (e.target === this) closeConvModal();
+};
+document.getElementById('deleteUserModal').onclick = function(e) {
+    if (e.target === this) closeUserModal();
+};
+</script>
+{% endblock %}

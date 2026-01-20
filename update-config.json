@@ -1,0 +1,52 @@
+{
+  "ImageRepository": {
+    "ImageIdentifier": "419772658335.dkr.ecr.eu-central-1.amazonaws.com/teams-bot:latest",
+    "ImageRepositoryType": "ECR",
+    "ImageConfiguration": {
+      "Port": "8080",
+      "RuntimeEnvironmentVariables": {
+        "ADMIN_POSTGRES_DB": "ruekoadmin",
+        "ADMIN_POSTGRES_HOST": "rueko-admin-db.cjoa4wkcck71.eu-central-1.rds.amazonaws.com",
+        "ADMIN_POSTGRES_PASSWORD": "RuekoAdmin2024!",
+        "ADMIN_POSTGRES_PORT": "5432",
+        "ADMIN_POSTGRES_USER": "adminuser",
+        "AZURE_TENANT_ID": "3e180d8a-c45a-4e21-a12b-bdca3ff66d19",
+        "BOT_APP_ID": "c1508d9b-718c-4e1d-82c3-05b327071d26",
+        "CHUNKING_MODEL": "gpt-5",
+        "CHUNKING_REASONING": "low",
+        "CONVERSATION_TTL_HOURS": "24",
+        "EMBEDDING_MODEL": "text-embedding-3-large",
+        "ENABLE_WEB_SEARCH": "true",
+        "GEMINI_MODEL": "gemini-3-flash-preview",
+        "GEMINI_REASONING": "low",
+        "LLM_PROVIDER": "openai",
+        "OPENAI_MODEL": "gpt-5.2",
+        "PINECONE_HOST": "https://teams-328h5t9.svc.aped-4627-b74a.pinecone.io",
+        "PINECONE_MACHINERY_NAMESPACE": "machinery-data",
+        "PINECONE_NAMESPACE": "rueko-documents",
+        "POSTGRES_DB": "defaultdb",
+        "POSTGRES_EQUIPMENT_TABLE": "equipment_matrix",
+        "POSTGRES_HOST": "sema-data-harshalvankudre-dae0.f.aivencloud.com",
+        "POSTGRES_PORT": "28700",
+        "POSTGRES_SCHEMA": "public",
+        "POSTGRES_SSLMODE": "require",
+        "POSTGRES_USER": "avnadmin",
+        "REASONING_EFFORT": "low",
+        "RERANK_TOP_N": "3",
+        "SEARCH_TOP_K": "5",
+        "USE_AGENT_SYSTEM": "true",
+        "AGENT_VERBOSE": "true",
+        "WEB_SEARCH_MAX_RESULTS": "3"
+      },
+      "RuntimeEnvironmentSecrets": {
+        "BOT_APP_PASSWORD": "arn:aws:secretsmanager:eu-central-1:419772658335:secret:teams-bot/BOT_APP_PASSWORD-e8HYVG",
+        "GEMINI_API_KEY": "arn:aws:secretsmanager:eu-central-1:419772658335:secret:teams-bot/GEMINI_API_KEY-02SiwE",
+        "OPENAI_API_KEY": "arn:aws:secretsmanager:eu-central-1:419772658335:secret:teams-bot/OPENAI_API_KEY-HKLKKW",
+        "PINECONE_API_KEY": "arn:aws:secretsmanager:eu-central-1:419772658335:secret:teams-bot/PINECONE_API_KEY-ujNDlR",
+        "POSTGRES_PASSWORD": "arn:aws:secretsmanager:eu-central-1:419772658335:secret:teams-bot/POSTGRES_PASSWORD-oz9M0A",
+        "REDIS_URL": "arn:aws:secretsmanager:eu-central-1:419772658335:secret:teams-bot/REDIS_URL-tUu2yI",
+        "TAVILY_API_KEY": "arn:aws:secretsmanager:eu-central-1:419772658335:secret:teams-bot/TAVILY_API_KEY-HNVCVK"
+      }
+    }
+  }
+}

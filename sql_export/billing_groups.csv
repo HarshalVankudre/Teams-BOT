@@ -1,0 +1,232 @@
+billing_group_id,code,name,full_name
+1,1.2010.020,Bürocontainer 20 Fuß,1.2010.020 - Bürocontainer 20 Fuß
+2,1.3010.010,Stromerzeuger 2-3KVA,1.3010.010 - Stromerzeuger 2-3KVA
+3,1.3010.040,"Stromerzeuger 6-9KVA,400V","1.3010.040 - Stromerzeuger 6-9KVA,400V"
+4,1.3010.060,Stromerzeuger 13-17KVA @3000 U/min,1.3010.060 - Stromerzeuger 13-17KVA @3000 U/min
+5,1.4010.010,Schmutzwasserpumpe 10 - 19 m³/h,1.4010.010 - Schmutzwasserpumpe 10 - 19 m³/h
+6,1.4010.020,Schmutzwasserpumpe 30 - 39 m³/h,1.4010.020 - Schmutzwasserpumpe 30 - 39 m³/h
+7,1.5010.010,Lichtmast,1.5010.010 - Lichtmast
+8,2.1010.010,"Minibagger 0 - 1,2 t","2.1010.010 - Minibagger 0 - 1,2 t"
+9,2.1010.020,"Minibagger 1,3 - 1,9 t","2.1010.020 - Minibagger 1,3 - 1,9 t"
+10,2.1010.021,"Minibagger 1,3 - 1,9 t (Elektro)","2.1010.021 - Minibagger 1,3 - 1,9 t (Elektro)"
+11,2.1010.030,"Minibagger 2,0 - 2,9 t","2.1010.030 - Minibagger 2,0 - 2,9 t"
+12,2.1010.040,"Minibagger 3,0 - 3,4 t","2.1010.040 - Minibagger 3,0 - 3,4 t"
+13,2.1010.050,"Minibagger 3,5 - 4,4 t","2.1010.050 - Minibagger 3,5 - 4,4 t"
+14,2.1020.010,"Kompaktbagger 4,5 - 5,4 t","2.1020.010 - Kompaktbagger 4,5 - 5,4 t"
+15,2.1020.020,"Kompaktbagger 5,5 - 6,9 t","2.1020.020 - Kompaktbagger 5,5 - 6,9 t"
+16,2.1020.030,"Kompaktbagger 7,0 - 9,9 t","2.1020.030 - Kompaktbagger 7,0 - 9,9 t"
+17,2.1020.040,"Kompaktbagger 10,0 - 10,9 t","2.1020.040 - Kompaktbagger 10,0 - 10,9 t"
+18,2.1030.020,"Kettenbagger 14,0 - 16,9 t","2.1030.020 - Kettenbagger 14,0 - 16,9 t"
+19,2.1030.021,"Kettenbagger 14,0 - 16,9 t (Kurzheck)","2.1030.021 - Kettenbagger 14,0 - 16,9 t (Kurzheck)"
+20,2.1030.050,"Kettenbagger 24,0 - 27,9 t","2.1030.050 - Kettenbagger 24,0 - 27,9 t"
+21,2.1030.051,"Kettenbagger 24,0 - 27,9 t (Kurzheck)","2.1030.051 - Kettenbagger 24,0 - 27,9 t (Kurzheck)"
+22,2.1030.060,"Kettenbagger 28,0 - 31,9 t","2.1030.060 - Kettenbagger 28,0 - 31,9 t"
+23,2.1030.061,"Kettenbagger 28,0 - 31,9 t (Kurzheck)","2.1030.061 - Kettenbagger 28,0 - 31,9 t (Kurzheck)"
+24,2.1040.015,"Mobilbagger 5,0 - 7,9 t (Kurzheck)","2.1040.015 - Mobilbagger 5,0 - 7,9 t (Kurzheck)"
+25,2.1040.020,"Mobilbagger 8,0 - 9,9 t","2.1040.020 - Mobilbagger 8,0 - 9,9 t"
+26,2.1040.030,"Mobilbagger 10,0 - 13,9 t","2.1040.030 - Mobilbagger 10,0 - 13,9 t"
+27,2.1040.041,"Mobilbagger 14,0 - 16,9 t (Kurzheck)","2.1040.041 - Mobilbagger 14,0 - 16,9 t (Kurzheck)"
+28,2.1040.050,"Mobilbagger 17,0 - 19,9 t","2.1040.050 - Mobilbagger 17,0 - 19,9 t"
+29,2.1040.051,"Mobilbagger 17,0 - 19,9 t (Kurzheck)","2.1040.051 - Mobilbagger 17,0 - 19,9 t (Kurzheck)"
+30,2.1040.060,"Mobilbagger 20,0 - 22,9 t","2.1040.060 - Mobilbagger 20,0 - 22,9 t"
+31,2.2010.010,MS01 Tieflöffel,2.2010.010 - MS01 Tieflöffel
+32,2.2010.020,MS03 Tieflöffel,2.2010.020 - MS03 Tieflöffel
+33,2.2010.030,MS08 Tieflöffel,2.2010.030 - MS08 Tieflöffel
+34,2.2010.060,OQ45-4 Tieflöffel,2.2010.060 - OQ45-4 Tieflöffel
+35,2.2010.080,OQ60-5 Tieflöffel,2.2010.080 - OQ60-5 Tieflöffel
+36,2.2010.090,OQ65 Tieflöffel,2.2010.090 - OQ65 Tieflöffel
+37,2.2010.100,OQ70-55 Tieflöffel,2.2010.100 - OQ70-55 Tieflöffel
+38,2.2020.060,OQ45-4 Tieflöffel (hydraulisch schwenkbar),2.2020.060 - OQ45-4 Tieflöffel (hydraulisch schwenkbar)
+39,2.2020.100,OQ70-55 Tieflöffel (hydraulisch schwenkbar),2.2020.100 - OQ70-55 Tieflöffel (hydraulisch schwenkbar)
+40,2.2025.020,MS03 Telelöffel,2.2025.020 - MS03 Telelöffel
+41,2.2030.010,MS01 Sieblöffel,2.2030.010 - MS01 Sieblöffel
+42,2.2030.020,MS03 Sieblöffel,2.2030.020 - MS03 Sieblöffel
+43,2.2030.030,MS08 Sieblöffel,2.2030.030 - MS08 Sieblöffel
+44,2.2030.080,OQ60-5 Sieblöffel,2.2030.080 - OQ60-5 Sieblöffel
+45,2.2030.100,OQ70-55 Sieblöffel,2.2030.100 - OQ70-55 Sieblöffel
+46,2.2040.010,MS01 Grabenräumlöffel (starr),2.2040.010 - MS01 Grabenräumlöffel (starr)
+47,2.2040.020,MS03 Grabenräumlöffel (starr),2.2040.020 - MS03 Grabenräumlöffel (starr)
+48,2.2040.030,MS08 Grabenräumlöffel (starr),2.2040.030 - MS08 Grabenräumlöffel (starr)
+49,2.2040.080,OQ60-5 Grabenräumlöffel (starr),2.2040.080 - OQ60-5 Grabenräumlöffel (starr)
+50,2.2040.100,OQ70-55 Grabenräumlöffel (starr),2.2040.100 - OQ70-55 Grabenräumlöffel (starr)
+51,2.2050.010,MS01 Grabenräumlöffel (hydraulisch schwenkbar),2.2050.010 - MS01 Grabenräumlöffel (hydraulisch schwenkbar)
+52,2.2050.020,MS03 Grabenräumlöffel (hydraulisch schwenkbar),2.2050.020 - MS03 Grabenräumlöffel (hydraulisch schwenkbar)
+53,2.2050.030,MS08 Grabenräumlöffel (hydraulisch schwenkbar),2.2050.030 - MS08 Grabenräumlöffel (hydraulisch schwenkbar)
+54,2.2050.060,OQ45-4 Grabenräumlöffel (hydraulisch schwenkbar),2.2050.060 - OQ45-4 Grabenräumlöffel (hydraulisch schwenkbar)
+55,2.2050.080,OQ60-5 Grabenräumlöffel (hydraulisch schwenkbar),2.2050.080 - OQ60-5 Grabenräumlöffel (hydraulisch schwenkbar)
+56,2.2050.090,OQ65 Grabenräumlöffel (hydraulisch schwenkbar),2.2050.090 - OQ65 Grabenräumlöffel (hydraulisch schwenkbar)
+57,2.2050.100,OQ70-55 Grabenräumlöffel (hydraulisch schwenkbar),2.2050.100 - OQ70-55 Grabenräumlöffel (hydraulisch schwenkbar)
+58,2.2060.020,MS03 Pendelgreifer,2.2060.020 - MS03 Pendelgreifer
+59,2.2060.060,OQ45-4 Pendelgreifer,2.2060.060 - OQ45-4 Pendelgreifer
+60,2.2060.080,OQ60-5 Pendelgreifer,2.2060.080 - OQ60-5 Pendelgreifer
+61,2.2060.090,OQ65 Pendelgreifer,2.2060.090 - OQ65 Pendelgreifer
+62,2.2060.100,OQ70-55 Pendelgreifer,2.2060.100 - OQ70-55 Pendelgreifer
+63,2.2070.010,MS01 Abbruch- und Sortiergreifer,2.2070.010 - MS01 Abbruch- und Sortiergreifer
+64,2.2070.020,MS03 Abbruch- und Sortiergreifer,2.2070.020 - MS03 Abbruch- und Sortiergreifer
+65,2.2070.030,MS08 Abbruch- und Sortiergreifer,2.2070.030 - MS08 Abbruch- und Sortiergreifer
+66,2.2070.060,OQ45-4 Abbruch- und Sortiergreifer,2.2070.060 - OQ45-4 Abbruch- und Sortiergreifer
+67,2.2070.080,OQ60-5 Abbruch- und Sortiergreifer,2.2070.080 - OQ60-5 Abbruch- und Sortiergreifer
+68,2.2070.100,OQ70-55 Abbruch- und Sortiergreifer,2.2070.100 - OQ70-55 Abbruch- und Sortiergreifer
+69,2.2080.010,MS01 Hydraulikhammer,2.2080.010 - MS01 Hydraulikhammer
+70,2.2080.020,MS03 Hydraulikhammer bis 349 kg,2.2080.020 - MS03 Hydraulikhammer bis 349 kg
+71,2.2080.040,MS08 Hydraulikhammer,2.2080.040 - MS08 Hydraulikhammer
+72,2.2080.070,OQ45-4 Hydraulikhammer,2.2080.070 - OQ45-4 Hydraulikhammer
+73,2.2080.080,OQ60-5 Hydraulikhammer bis 599 kg,2.2080.080 - OQ60-5 Hydraulikhammer bis 599 kg
+74,2.2080.081,OQ60-5 Hydraulikhammer ab 600 kg,2.2080.081 - OQ60-5 Hydraulikhammer ab 600 kg
+75,2.2080.100,OQ70-55 Hydraulikhammer 1200 kg,2.2080.100 - OQ70-55 Hydraulikhammer 1200 kg
+76,2.2080.101,OQ70-55 Hydraulikhammer 1500 kg,2.2080.101 - OQ70-55 Hydraulikhammer 1500 kg
+77,2.2080.102,OQ70-55 Hydraulikhammer 2000 kg,2.2080.102 - OQ70-55 Hydraulikhammer 2000 kg
+78,2.2090.030,MS08 Anbauverdichter,2.2090.030 - MS08 Anbauverdichter
+79,2.2090.060,OQ45-4 Anbauverdichter,2.2090.060 - OQ45-4 Anbauverdichter
+80,2.2090.070,OQ45-5 Anbauverdichter,2.2090.070 - OQ45-5 Anbauverdichter
+81,2.2090.080,OQ60-5 Anbauverdichter bis 749 kg,2.2090.080 - OQ60-5 Anbauverdichter bis 749 kg
+82,2.2090.081,OQ60-5 Anbauverdichter ab 750 kg,2.2090.081 - OQ60-5 Anbauverdichter ab 750 kg
+83,2.2090.100,OQ70-55 Anbauverdichter,2.2090.100 - OQ70-55 Anbauverdichter
+84,2.2100.100,OQ70-55 Abbruchzange/Pulverisierer,2.2100.100 - OQ70-55 Abbruchzange/Pulverisierer
+85,2.2110.100,OQ70-55 Roderechen,2.2110.100 - OQ70-55 Roderechen
+86,2.2120.100,OQ70-55 Schaufelseparator,2.2120.100 - OQ70-55 Schaufelseparator
+87,2.2130.100,OQ70-55 Brecherlöffel,2.2130.100 - OQ70-55 Brecherlöffel
+88,2.2140.020,MS03 Erdbohrer (Bagger),2.2140.020 - MS03 Erdbohrer (Bagger)
+89,2.2140.021,Bohrschnecke für Erdbohrer,2.2140.021 - Bohrschnecke für Erdbohrer
+90,2.2140.022,Verlängerung für Erdbohrer,2.2140.022 - Verlängerung für Erdbohrer
+91,2.2150.080,OQ60-5 Anbaufräse,2.2150.080 - OQ60-5 Anbaufräse
+92,2.2150.100,OQ70-55 Anbaufräse,2.2150.100 - OQ70-55 Anbaufräse
+93,2.2160.100,OQ70-55 Anbaumagnet,2.2160.100 - OQ70-55 Anbaumagnet
+94,2.2170.100,OQ70-55 Spatenlöffel,2.2170.100 - OQ70-55 Spatenlöffel
+95,2.2180.080,OQ60-5 Palettengabel (Bagger),2.2180.080 - OQ60-5 Palettengabel (Bagger)
+96,2.2190.080,OQ60-5 Tiltrotator (Sandwich),2.2190.080 - OQ60-5 Tiltrotator (Sandwich)
+97,2.2190.100,OQ70-55 Tiltrotator (Sandwich),2.2190.100 - OQ70-55 Tiltrotator (Sandwich)
+98,2.2200.080,OQ60-5 Asphaltschneidrad,2.2200.080 - OQ60-5 Asphaltschneidrad
+99,2.2210.080,OQ60-5 Anbaugrabenfräse,2.2210.080 - OQ60-5 Anbaugrabenfräse
+100,2.2220.080,OQ60-5 Planierbalken,2.2220.080 - OQ60-5 Planierbalken
+101,2.2230.100,OQ70-55 Rohrschiebeadapter (mechanisch),2.2230.100 - OQ70-55 Rohrschiebeadapter (mechanisch)
+102,2.2240.100,OQ70-55 Anbaukernbohrgerät,2.2240.100 - OQ70-55 Anbaukernbohrgerät
+103,2.2250.100,OQ70-55 Reißzahn,2.2250.100 - OQ70-55 Reißzahn
+104,2.2260.020,MS03 Wurzelschneider,2.2260.020 - MS03 Wurzelschneider
+105,2.3010.010,"Radlader 0,0 - 1,9 t","2.3010.010 - Radlader 0,0 - 1,9 t"
+106,2.3010.020,"Radlader 2,0 - 3,9 t","2.3010.020 - Radlader 2,0 - 3,9 t"
+107,2.3010.030,"CAT 907 | alt - Radlader 4,0 - 5,9 t CAT 907","2.3010.030 - CAT 907 | alt - Radlader 4,0 - 5,9 t CAT 907"
+108,2.3010.030,"Radlader 4,0 - 5,9 t","2.3010.030 - Radlader 4,0 - 5,9 t"
+109,2.3010.040,"Radlader 6,0 - 9,9t","2.3010.040 - Radlader 6,0 - 9,9t"
+110,2.3010.050,"Radlader 10,0 - 13,9t","2.3010.050 - Radlader 10,0 - 13,9t"
+111,2.3010.060,"Radlader 14,0 - 17,9 t","2.3010.060 - Radlader 14,0 - 17,9 t"
+112,2.3010.070,"Radlader 23,9 - 26,9 t","2.3010.070 - Radlader 23,9 - 26,9 t"
+113,2.4010.010,Standardschaufel (Rad-/Kompaktlader),2.4010.010 - Standardschaufel (Rad-/Kompaktlader)
+114,2.4010.020,4-in-1-Schaufel (Rad-/Kompaktlader),2.4010.020 - 4-in-1-Schaufel (Rad-/Kompaktlader)
+115,2.4020.010,Palettengabel (Rad-/Kompaktlader),2.4020.010 - Palettengabel (Rad-/Kompaktlader)
+116,2.4030.010,Kehrbesen (Rad-/Kompaktlader),2.4030.010 - Kehrbesen (Rad-/Kompaktlader)
+117,2.4040.010,Schneeschild (Rad-/Kompaktlader),2.4040.010 - Schneeschild (Rad-/Kompaktlader)
+118,2.5010.031,"Raddumper NL 1,0 – 1,9 t (Elektro)","2.5010.031 - Raddumper NL 1,0 – 1,9 t (Elektro)"
+119,2.5010.050,"Raddumper NL 3,0 – 4,4 t","2.5010.050 - Raddumper NL 3,0 – 4,4 t"
+120,2.5010.070,"Raddumper NL 6,0 – 7,4 t","2.5010.070 - Raddumper NL 6,0 – 7,4 t"
+121,2.5010.080,"Raddumper NL 7,5 – 9,9 t","2.5010.080 - Raddumper NL 7,5 – 9,9 t"
+122,2.5010.090,"Raddumper NL 10,0 - 14,9 t","2.5010.090 - Raddumper NL 10,0 - 14,9 t"
+123,2.5020.020,"Kettendumper NL 0,5 – 0,9 t","2.5020.020 - Kettendumper NL 0,5 – 0,9 t"
+124,2.5020.050,"Kettendumper NL 3,0 – 5,0 t","2.5020.050 - Kettendumper NL 3,0 – 5,0 t"
+125,2.6010.010,"Planierraupe 13,0 - 15,9 t","2.6010.010 - Planierraupe 13,0 - 15,9 t"
+126,2.6045.010,3D - GPS Basisstation,2.6045.010 - 3D - GPS Basisstation
+127,2.6045.020,3D - GPS Steuerung,2.6045.020 - 3D - GPS Steuerung
+128,2.7010.010,Anhänger Tieflader GG 3000 kg,2.7010.010 - Anhänger Tieflader GG 3000 kg
+129,2.7010.020,Anhänger Tieflader GG 3500 kg,2.7010.020 - Anhänger Tieflader GG 3500 kg
+130,2.7020.010,Anhänger Mulde GG 3500 kg,2.7020.010 - Anhänger Mulde GG 3500 kg
+131,2.7030.010,Auffahrrampen,2.7030.010 - Auffahrrampen
+132,3.1010.010,"Vibrationsplatte 65,0 - 79,9 kg","3.1010.010 - Vibrationsplatte 65,0 - 79,9 kg"
+133,3.1010.020,"Vibrationsplatte 80,0 - 89,9 kg","3.1010.020 - Vibrationsplatte 80,0 - 89,9 kg"
+134,3.1010.030,"Vibrationsplatte 90,0 - 139,9 kg","3.1010.030 - Vibrationsplatte 90,0 - 139,9 kg"
+135,3.1010.040,"Vibrationsplatte 140,0 -  179,9 kg","3.1010.040 - Vibrationsplatte 140,0 -  179,9 kg"
+136,3.1010.050,"Vibrationsplatte 180,0 - 249,9 kg","3.1010.050 - Vibrationsplatte 180,0 - 249,9 kg"
+137,3.1010.060,"Vibrationsplatte 250,0 - 349,9 kg","3.1010.060 - Vibrationsplatte 250,0 - 349,9 kg"
+138,3.1010.080,"Vibrationsplatte 450,0 - 549,9 kg","3.1010.080 - Vibrationsplatte 450,0 - 549,9 kg"
+139,3.1010.100,"Vibrationsplatte 650,0 - 749,9 kg","3.1010.100 - Vibrationsplatte 650,0 - 749,9 kg"
+140,3.1010.110,"Vibrationsplatte 750,0 - 849,9 kg","3.1010.110 - Vibrationsplatte 750,0 - 849,9 kg"
+141,3.1020.010,Pflasterplattensatz für Vibrationsplatte,3.1020.010 - Pflasterplattensatz für Vibrationsplatte
+142,3.1030.010,"Vibrationsstampfer 65,0 kg","3.1030.010 - Vibrationsstampfer 65,0 kg"
+143,3.1040.010,Innenrüttler,3.1040.010 - Innenrüttler
+144,3.2010.010,"Grabenwalze 1,0 - 2,0 t","3.2010.010 - Grabenwalze 1,0 - 2,0 t"
+145,3.2020.010,"Walzenzug (Glattmantel) 5,0 - 7,9 t","3.2020.010 - Walzenzug (Glattmantel) 5,0 - 7,9 t"
+146,3.2020.040,"Walzenzug (Glattmantel) 12,0 - 14,9 t","3.2020.040 - Walzenzug (Glattmantel) 12,0 - 14,9 t"
+147,3.2020.050,"Walzenzug (Glattmantel) 15,0 - 18,9 t","3.2020.050 - Walzenzug (Glattmantel) 15,0 - 18,9 t"
+148,3.2020.070,"Walzenzug (Glattmantel) 22,0 - 26,9 t","3.2020.070 - Walzenzug (Glattmantel) 22,0 - 26,9 t"
+149,3.2025.040,"Walzenzug mit Anbauplattenverdichter (Glattmantel) 12,0 - 14,9 t","3.2025.040 - Walzenzug mit Anbauplattenverdichter (Glattmantel) 12,0 - 14,9 t"
+150,3.2030.010,Anbauplattenverdichter (Walzenzug),3.2030.010 - Anbauplattenverdichter (Walzenzug)
+151,3.2040.005,"Walzenzug (Schaffuß) 5,0 - 7,9 t","3.2040.005 - Walzenzug (Schaffuß) 5,0 - 7,9 t"
+152,3.2040.030,"Walzenzug (Schaffuß) 19,0 - 21,9 t","3.2040.030 - Walzenzug (Schaffuß) 19,0 - 21,9 t"
+153,3.2060.010,"Tandemwalze 0 - 0,9 t","3.2060.010 - Tandemwalze 0 - 0,9 t"
+154,3.2060.030,"Tandemwalze 2,0 - 2,9 t","3.2060.030 - Tandemwalze 2,0 - 2,9 t"
+155,3.2060.040,"Tandemwalze 3,0 - 4,9 t","3.2060.040 - Tandemwalze 3,0 - 4,9 t"
+156,3.2060.060,"Tandemwalze 7,0 - 8,9 t","3.2060.060 - Tandemwalze 7,0 - 8,9 t"
+157,3.2060.065,"Tandemwalze 7,0 - 8,9 t (Oszillation)","3.2060.065 - Tandemwalze 7,0 - 8,9 t (Oszillation)"
+158,3.2060.070,"Tandemwalze 9,0 - 10,9 t","3.2060.070 - Tandemwalze 9,0 - 10,9 t"
+159,3.2060.080,"Tandemwalze 9,0 - 10,9 t (Oszillation)","3.2060.080 - Tandemwalze 9,0 - 10,9 t (Oszillation)"
+160,3.2060.090,"Tandemwalze 9,0 - 10,9 t (Asphaltmanger)","3.2060.090 - Tandemwalze 9,0 - 10,9 t (Asphaltmanger)"
+161,3.2060.100,"Tandemwalze 11,0 - 14,9 t (Asphaltmanager)","3.2060.100 - Tandemwalze 11,0 - 14,9 t (Asphaltmanager)"
+162,3.2065.066,"Tandemwalze mit Splittstreuer 7,0 - 8,9 t (Asphaltmanager)","3.2065.066 - Tandemwalze mit Splittstreuer 7,0 - 8,9 t (Asphaltmanager)"
+163,3.2065.070,"Tandemwalze mit Splittstreuer 9,0 - 10,9 t","3.2065.070 - Tandemwalze mit Splittstreuer 9,0 - 10,9 t"
+164,3.2065.090,"Tandemwalze mit Splittstreuer 9,0 - 10,9 t (Asphaltmanger)","3.2065.090 - Tandemwalze mit Splittstreuer 9,0 - 10,9 t (Asphaltmanger)"
+165,3.2070.030,"Kombiwalze 2,0 - 2,9 t","3.2070.030 - Kombiwalze 2,0 - 2,9 t"
+166,3.2070.060,"Kombiwalze 7,0 - 8,9 t","3.2070.060 - Kombiwalze 7,0 - 8,9 t"
+167,3.2070.070,"Kombiwalze 7,0 - 8,9 t (Asphaltmanager)","3.2070.070 - Kombiwalze 7,0 - 8,9 t (Asphaltmanager)"
+168,3.2080.010,Splittstreuer für Tandem- und Kombiwalzen bis 10 to.,3.2080.010 - Splittstreuer für Tandem- und Kombiwalzen bis 10 to.
+169,3.2090.020,"Gummiradwalze 8,0 - 27,9 t","3.2090.020 - Gummiradwalze 8,0 - 27,9 t"
+170,4.1010.010,Kaltfräse (Rad) FB 500 mm,4.1010.010 - Kaltfräse (Rad) FB 500 mm
+171,4.1020.010,Kaltfräse (Kette) FB 1000 mm,4.1020.010 - Kaltfräse (Kette) FB 1000 mm
+172,4.1030.010,Förderband für Kaltfräse (Rad) FB 500 mm,4.1030.010 - Förderband für Kaltfräse (Rad) FB 500 mm
+173,4.1040.010,Fräswalze für Kaltfräse,4.1040.010 - Fräswalze für Kaltfräse
+174,4.2010.010,Beschicker Kurzband,4.2010.010 - Beschicker Kurzband
+175,4.2010.020,Beschicker Offset,4.2010.020 - Beschicker Offset
+176,4.2020.010,Schwenkband für Beschicker,4.2020.010 - Schwenkband für Beschicker
+177,4.2030.010,Materialkübel für Beschicker,4.2030.010 - Materialkübel für Beschicker
+178,4.3010.010,"Radfertiger max EB 0 - 2,4 m","4.3010.010 - Radfertiger max EB 0 - 2,4 m"
+179,4.3010.030,"Radfertiger max EB 4,5 - 5,4 m","4.3010.030 - Radfertiger max EB 4,5 - 5,4 m"
+180,4.3010.050,"Radfertiger max EB 7,5 - 9,4 m","4.3010.050 - Radfertiger max EB 7,5 - 9,4 m"
+181,4.3020.005,"Kettenfertiger max EB 0 - 2,4 m","4.3020.005 - Kettenfertiger max EB 0 - 2,4 m"
+182,4.3020.010,"Kettenfertiger max EB 2,5 - 4,4 m","4.3020.010 - Kettenfertiger max EB 2,5 - 4,4 m"
+183,4.3020.020,"Kettenfertiger max EB 4,5 - 5,4 m","4.3020.020 - Kettenfertiger max EB 4,5 - 5,4 m"
+184,4.3020.030,"Kettenfertiger max EB 5,5 - 8,4 m","4.3020.030 - Kettenfertiger max EB 5,5 - 8,4 m"
+185,4.3020.040,"Kettenfertiger max EB 8,5 - 10,4 m","4.3020.040 - Kettenfertiger max EB 8,5 - 10,4 m"
+186,4.3020.041,"Kettenfertiger max EB 8,5 - 10,4 m (-5)","4.3020.041 - Kettenfertiger max EB 8,5 - 10,4 m (-5)"
+187,4.3020.045,"Kettenfertiger max EB 8,5 - 10,4 m (HGT)","4.3020.045 - Kettenfertiger max EB 8,5 - 10,4 m (HGT)"
+188,4.3020.048,"Kettenfertiger max EB 8,5 - 10,4 m (SprayJet)","4.3020.048 - Kettenfertiger max EB 8,5 - 10,4 m (SprayJet)"
+189,4.3020.050,"Kettenfertiger max EB 10,5 - 12,4 m","4.3020.050 - Kettenfertiger max EB 10,5 - 12,4 m"
+190,4.3020.051,"Kettenfertiger max EB 10,5 - 12,4 m (Hochverdichtung -3)","4.3020.051 - Kettenfertiger max EB 10,5 - 12,4 m (Hochverdichtung -3)"
+191,4.3020.052,"Kettenfertiger max EB 10,5 - 12,4 m (Hochverdichtung -5)","4.3020.052 - Kettenfertiger max EB 10,5 - 12,4 m (Hochverdichtung -5)"
+192,4.3020.060,"Kettenfertiger max EB 12,5 - 14,4 m","4.3020.060 - Kettenfertiger max EB 12,5 - 14,4 m"
+193,4.3020.061,"Kettenfertiger max EB 12,5 - 14,4 m (Hochverdichtung)","4.3020.061 - Kettenfertiger max EB 12,5 - 14,4 m (Hochverdichtung)"
+194,4.3025.010,starre Bohle für Fertiger,4.3025.010 - starre Bohle für Fertiger
+195,4.3030.010,Bohlenverbreiterungen für Fertiger,4.3030.010 - Bohlenverbreiterungen für Fertiger
+196,4.3035.010,Bohlenverschmälerung für Fertiger,4.3035.010 - Bohlenverschmälerung für Fertiger
+197,4.3040.010,BigSki Ausrüstung für Fertiger,4.3040.010 - BigSki Ausrüstung für Fertiger
+198,4.3050.010,Leuchtballon,4.3050.010 - Leuchtballon
+199,4.3060.010,RoadScan,4.3060.010 - RoadScan
+200,4.3065.010,Navitronic,4.3065.010 - Navitronic
+201,4.3066.010,BOMAP,4.3066.010 - BOMAP
+202,4.4040.010,Fugenschneider bis Ø450 mm,4.4040.010 - Fugenschneider bis Ø450 mm
+203,5.1020.020,"Prallbrecher 25,0 - 29,9 t","5.1020.020 - Prallbrecher 25,0 - 29,9 t"
+204,5.1030.030,"Backenbrecher 30,0 - 35,9 t","5.1030.030 - Backenbrecher 30,0 - 35,9 t"
+205,5.1040.010,"Siebanlage 15,0 - 17,4 t","5.1040.010 - Siebanlage 15,0 - 17,4 t"
+206,5.2010.010,Betonmischer,5.2010.010 - Betonmischer
+207,5.5010.010,"Scherenarbeitsbühne (elektrisch) AH 8,0 - 9,9 m","5.5010.010 - Scherenarbeitsbühne (elektrisch) AH 8,0 - 9,9 m"
+208,5.5050.010,"Anhängerarbeitsbühnen AH 14,0 - 16,9 m","5.5050.010 - Anhängerarbeitsbühnen AH 14,0 - 16,9 m"
+209,5.6040.010,"Telekran (Rad) TL 15,0 - 19,9 t","5.6040.010 - Telekran (Rad) TL 15,0 - 19,9 t"
+210,5.6040.020,"Telekran (Rad) TL 20,0 - 34,9 t","5.6040.020 - Telekran (Rad) TL 20,0 - 34,9 t"
+211,5.6040.030,"Telekran (Rad) TL 35,0 - 44,9 t","5.6040.030 - Telekran (Rad) TL 35,0 - 44,9 t"
+212,5.6050.010,"Telekran (Kette) TL 15,0 - 19,9 t","5.6050.010 - Telekran (Kette) TL 15,0 - 19,9 t"
+213,5.6050.020,"Telekran (Kette) TL 29,0 - 34,9 t","5.6050.020 - Telekran (Kette) TL 29,0 - 34,9 t"
+214,5.6050.030,"Telekran (Kette) TL 35,0 - 44,9 t","5.6050.030 - Telekran (Kette) TL 35,0 - 44,9 t"
+215,5.6050.040,"Telekran (Kette) TL 45,0 - 54,9 t","5.6050.040 - Telekran (Kette) TL 45,0 - 54,9 t"
+216,5.6060.010,"Spitzenausleger für Telekran (Kette) TL 35,0 - 44,9 t","5.6060.010 - Spitzenausleger für Telekran (Kette) TL 35,0 - 44,9 t"
+217,5.6070.010,"Miniraupenkran TL 2,0 - 2,9 t","5.6070.010 - Miniraupenkran TL 2,0 - 2,9 t"
+218,5.7010.010,"Teleskoplader (starr) TL 1,0 - 1,9 t","5.7010.010 - Teleskoplader (starr) TL 1,0 - 1,9 t"
+219,5.7010.020,"Teleskoplader (starr) TL 2,0 - 2,9 t","5.7010.020 - Teleskoplader (starr) TL 2,0 - 2,9 t"
+220,5.7010.040,"Teleskoplader (starr) TL 4,5 - 5,4 t","5.7010.040 - Teleskoplader (starr) TL 4,5 - 5,4 t"
+221,5.8010.010,Standardschaufel für Teleskoplader,5.8010.010 - Standardschaufel für Teleskoplader
+222,5.8020.010,Palettengabel für Teleskoplader,5.8020.010 - Palettengabel für Teleskoplader
+223,5.8030.010,Lasthaken für Teleskoplader,5.8030.010 - Lasthaken für Teleskoplader
+224,6.1010.010,Kernbohrgerät bis Ø250 mm,6.1010.010 - Kernbohrgerät bis Ø250 mm
+225,6.6010.010,Bautrockner,6.6010.010 - Bautrockner
+226,7.2010.030,"Elektrohammer bis 9,0 - 10,9 kg","7.2010.030 - Elektrohammer bis 9,0 - 10,9 kg"
+227,7.2010.040,"Elektrohammer bis 20,0 - 25,9 kg","7.2010.040 - Elektrohammer bis 20,0 - 25,9 kg"
+228,8.1010.010,Tischsäge bis Ø400 mm,8.1010.010 - Tischsäge bis Ø400 mm
+229,8.4010.010,Holzhäcksler Anhänger,8.4010.010 - Holzhäcksler Anhänger
+230,9.1080.010,"Förderband 18,0 - 21,9 m","9.1080.010 - Förderband 18,0 - 21,9 m"
+231,9.9999.999,Sondervermietung,9.9999.999 - Sondervermietung

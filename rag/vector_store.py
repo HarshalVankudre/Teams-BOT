@@ -72,7 +72,8 @@ class PineconeStore:
         query: str,
         top_k: int = None,
         filters: Optional[Dict[str, Any]] = None,
-        include_metadata: bool = True
+        include_metadata: bool = True,
+        search_all_namespaces: bool = True
     ) -> List[Dict[str, Any]]:
         """
         Search for similar chunks using a text query.
@@ -82,6 +83,7 @@ class PineconeStore:
             top_k: Number of results to return
             filters: Metadata filters to apply
             include_metadata: Whether to include metadata in results
+            search_all_namespaces: If True, search both documents and machinery namespaces
 
         Returns:
             List of matching chunks with scores
@@ -94,30 +96,52 @@ class PineconeStore:
         # Build filter if provided
         pinecone_filter = self._build_filter(filters) if filters else None
 
-        # Query Pinecone
-        results = self.index.query(
-            vector=query_embedding,
-            top_k=top_k,
-            namespace=self.namespace,
-            include_metadata=include_metadata,
-            filter=pinecone_filter
-        )
+        all_results = []
 
-        # Format results
-        formatted_results = []
-        for match in results.matches:
-            result = {
-                "id": match.id,
-                "score": match.score,
-            }
-            if include_metadata and match.metadata:
-                result["metadata"] = match.metadata
-                result["content"] = match.metadata.get("content", "")
-                result["title"] = match.metadata.get("title", "")
-                result["source_file"] = match.metadata.get("source_file", "")
-            formatted_results.append(result)
+        # Determine which namespaces to search
+        namespaces_to_search = [self.namespace]
+        if search_all_namespaces:
+            machinery_ns = config.pinecone_machinery_namespace
+            if machinery_ns and machinery_ns != self.namespace:
+                namespaces_to_search.append(machinery_ns)
 
-        return formatted_results
+        # Search each namespace
+        for ns in namespaces_to_search:
+            try:
+                results = self.index.query(
+                    vector=query_embedding,
+                    top_k=top_k,
+                    namespace=ns,
+                    include_metadata=include_metadata,
+                    filter=pinecone_filter
+                )
+
+                # Format results from this namespace
+                for match in results.matches:
+                    result = {
+                        "id": match.id,
+                        "score": match.score,
+                        "namespace": ns,
+                    }
+                    if include_metadata and match.metadata:
+                        result["metadata"] = match.metadata
+                        # Handle different metadata field names per namespace
+                        if ns == config.pinecone_machinery_namespace:
+                            result["content"] = match.metadata.get("inhalt", match.metadata.get("content", ""))
+                            result["title"] = match.metadata.get("titel", match.metadata.get("title", ""))
+                            result["source_file"] = "machinery-database"
+                        else:
+                            result["content"] = match.metadata.get("content", "")
+                            result["title"] = match.metadata.get("title", "")
+                            result["source_file"] = match.metadata.get("source_file", "")
+                    all_results.append(result)
+            except Exception as e:
+                print(f"[PineconeStore] Error searching namespace '{ns}': {e}")
+                # Continue with other namespaces instead of failing completely
+
+        # Sort by score descending and limit to top_k
+        all_results.sort(key=lambda x: x.get("score", 0), reverse=True)
+        return all_results[:top_k]
 
     async def search_by_category(
         self,

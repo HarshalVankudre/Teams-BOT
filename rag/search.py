@@ -1,6 +1,6 @@
 """
 RAG Search - Main entry point for the search pipeline.
-Routes queries through the multi-agent system or falls back to direct search.
+Routes queries through the single agent or falls back to direct search.
 """
 import time
 import os
@@ -13,20 +13,24 @@ from .config import config
 
 def model_supports_reasoning(model_name: str) -> bool:
     """Check if a model supports the reasoning.effort parameter.
-    Only OpenAI's o-series models (o1, o3, etc.) support reasoning."""
+    o-series and gpt-5 models support reasoning in the Responses API."""
     if not model_name:
         return False
     model_lower = model_name.lower()
-    return model_lower.startswith('o1') or model_lower.startswith('o3')
+    return (
+        model_lower.startswith("o1")
+        or model_lower.startswith("o3")
+        or model_lower.startswith("gpt-5")
+    )
 
 
-# Import agent system
+# Import single agent
 try:
-    from .agents import AgentSystem, create_agent_system
-    AGENT_SYSTEM_AVAILABLE = True
+    from .single_agent import SingleAgent, create_single_agent
+    SINGLE_AGENT_AVAILABLE = True
 except ImportError as e:
-    AGENT_SYSTEM_AVAILABLE = False
-    print(f"[WARNING] Agent system not available: {e}")
+    SINGLE_AGENT_AVAILABLE = False
+    print(f"[WARNING] Single agent not available: {e}")
 
 # Import embeddings for fallback
 from .vector_store import PineconeStore
@@ -35,9 +39,9 @@ from .embeddings import EmbeddingService
 
 class RAGSearch:
     """
-    RAG Search with multi-agent routing.
+    RAG Search with single agent routing.
 
-    Primary mode: Agent System (orchestrator -> sub-agents -> reviewer)
+    Primary mode: Single Agent with tool calls
     Fallback mode: Direct Pinecone search
     """
 
@@ -62,24 +66,60 @@ class RAGSearch:
         self.machinery_namespace = config.pinecone_machinery_namespace
         self.documents_namespace = config.pinecone_namespace
 
-        # Agent System
-        self.use_agent_system = config.use_agent_system and AGENT_SYSTEM_AVAILABLE
-        self.agent_system = None
+        # Single Agent
+        self.use_single_agent = config.use_agent_system and SINGLE_AGENT_AVAILABLE
+        self.agent = None
 
-        if self.use_agent_system:
+        if self.use_single_agent:
             try:
-                self.agent_system = create_agent_system(
+                self.agent = create_single_agent(
                     verbose=config.agent_verbose,
-                    enable_web_search=config.enable_web_search,
-                    parallel_execution=config.agent_parallel_execution,
-                    redis_client=redis_client
+                    pinecone_service=self.vector_store,
                 )
-                print("[RAG] Agent System: Enabled")
+                print("[RAG] Single Agent: Enabled")
             except Exception as e:
-                print(f"[RAG] Agent System initialization failed: {e}")
-                self.use_agent_system = False
+                print(f"[RAG] Single Agent initialization failed: {e}")
+                self.use_single_agent = False
         else:
-            print("[RAG] Agent System: Disabled (using direct search)")
+            print("[RAG] Single Agent: Disabled (using direct search)")
+
+    async def _get_conversation_history(self, thread_key: str) -> List[Dict]:
+        """Get full conversation history from Redis for context."""
+        if not self.redis_client or not thread_key:
+            return []
+        try:
+            import json
+            history_key = f"chat_history:{thread_key}"
+            history_json = await self.redis_client.get(history_key)
+            if history_json:
+                history = json.loads(history_json)
+                max_messages = max(2, int(config.conversation_max_messages))
+                return history[-max_messages:]
+        except Exception as e:
+            print(f"[RAG] Error getting history: {e}")
+        return []
+
+    async def _store_conversation_turn(self, thread_key: str, user_msg: str, assistant_msg: str):
+        """Store conversation turn in Redis for full session context."""
+        if not self.redis_client or not thread_key:
+            return
+        try:
+            import json
+            history_key = f"chat_history:{thread_key}"
+            history = await self._get_conversation_history(thread_key)
+            
+            # Add new turn
+            history.append({"role": "user", "content": user_msg})
+            history.append({"role": "assistant", "content": assistant_msg})
+            
+            # Keep last N messages for full session context
+            max_messages = max(2, int(config.conversation_max_messages))
+            history = history[-max_messages:]
+            
+            # Store with configured TTL
+            await self.redis_client.setex(history_key, config.conversation_ttl_hours * 3600, json.dumps(history))
+        except Exception as e:
+            print(f"[RAG] Error storing history: {e}")
 
     async def search_and_generate(
         self,
@@ -93,7 +133,7 @@ class RAGSearch:
         thread_key: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        Main entry point: Process query through agent system or fallback.
+        Main entry point: Process query through single agent or fallback.
 
         Args:
             query: User's question
@@ -111,32 +151,42 @@ class RAGSearch:
         top_k = top_k or config.search_top_k
         start_time = time.time()
 
-        # PRIMARY: Use Agent System
-        if self.use_agent_system and self.agent_system:
+        # PRIMARY: Use Single Agent
+        if self.use_single_agent and self.agent:
             try:
-                result = await self.agent_system.process(
+                # Get conversation history for context
+                conversation_history = await self._get_conversation_history(thread_key)
+                
+                if conversation_history:
+                    print(f"[RAG] Using {len(conversation_history)} messages from history")
+                
+                result = await self.agent.process(
                     user_query=query,
-                    user_id=user_id,
-                    user_name=user_name,
-                    thread_key=thread_key
+                    conversation_history=conversation_history,
+                    system_instructions=system_instructions,
+                    thread_key=thread_key,
                 )
 
-                print(f"[RAG] Agent System response in {result.execution_time_ms}ms")
-                print(f"[RAG] Agents used: {result.agents_used}")
+                print(f"[RAG] Single Agent response in {result.execution_time_ms}ms")
+                print(f"[RAG] Tools used: {result.tools_used}")
+
+                # Store this turn in history
+                await self._store_conversation_turn(thread_key, query, result.response)
 
                 return {
                     "response": result.response,
                     "sources": result.sources,
-                    "chunks_used": len(result.sources),
-                    "response_id": None,  # Agent system manages its own context
-                    "web_results_used": result.metadata.get("web_results_count", 0),
-                    "query_type": result.query_intent or "agent",
-                    "agents_used": result.agents_used,
-                    "execution_time_ms": result.execution_time_ms
+                    "chunks_used": len(result.sources) if result.sources else result.sql_results_count,
+                    "response_id": None,
+                    "web_results_used": 0,
+                    "query_type": "single_agent",
+                    "agents_used": result.tools_used,
+                    "execution_time_ms": result.execution_time_ms,
+                    "logs": getattr(result, "logs", [])
                 }
 
             except Exception as e:
-                print(f"[RAG] Agent System error: {e}, falling back to direct search")
+                print(f"[RAG] Single Agent error: {e}, falling back to direct search")
                 # Fall through to direct search
 
         # FALLBACK: Direct Pinecone search
@@ -162,6 +212,20 @@ class RAGSearch:
         # Search Pinecone
         search_results = await self.search_pinecone(query, top_k=top_k, filters=filters)
 
+        if not search_results:
+            return {
+                "response": (
+                    "Ich kann nur mit internen Daten antworten. "
+                    "In den internen Datenbanken wurde keine Information gefunden. "
+                    "Gibt es einen Hersteller, Maschinentyp oder weitere Kriterien?"
+                ),
+                "sources": [],
+                "chunks_used": 0,
+                "response_id": None,
+                "web_results_used": 0,
+                "query_type": "fallback"
+            }
+
         # Build context
         full_context, all_sources = self._build_context(search_results, [])
 
@@ -180,7 +244,7 @@ class RAGSearch:
 
 Frage: {query}"""}
                 ],
-                "max_output_tokens": 2000
+                "max_output_tokens": config.fallback_max_output_tokens
             }
 
             # Add reasoning for supported models
@@ -308,7 +372,7 @@ Frage: {query}"""}
             score = result.get("score", 0)
 
             context_parts.append(f"""
-### Quelle {i + 1}: {title}
+### Dokument {i + 1}: {title}
 **Herkunft:** {source_file} ({namespace})
 **Relevanz:** {score:.2%}
 
@@ -355,16 +419,14 @@ Frage: {query}"""}
 
     def _get_default_instructions(self) -> str:
         """Get default system instructions"""
-        return """Du bist der RÜKO AI-Assistent mit Zugriff auf interne Datenbanken.
-
-PRIORITÄT: Interne Daten immer zuerst.
+        return """Du bist der RUEKO AI-Assistent mit Zugriff auf interne Daten (Pinecone).
 
 REGELN:
-1. Zitiere Quellen: "Laut [Quelle]..."
-2. Strukturiere Antworten übersichtlich
-3. Antworte in der Sprache der Frage
-
-Bei fehlenden internen Daten: "In den internen Datenbanken wurde nichts gefunden." """
+1. Antworte ausschliesslich auf Basis des internen Kontexts.
+2. Nenne Quellen nur, wenn der Nutzer explizit danach fragt.
+3. Keine externen Informationen oder Annahmen.
+4. Wenn keine internen Daten vorhanden sind: sage das klar und stelle eine Rueckfrage.
+5. Antworte in der Sprache der Frage."""
 
     async def search(
         self,

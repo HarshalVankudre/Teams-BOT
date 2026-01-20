@@ -1,0 +1,291 @@
+{% extends "base.html" %}
+
+{% block title %}Gelernte Regeln{% endblock %}
+
+{% block content %}
+<h1>Gelernte Regeln</h1>
+
+<div class="rules-header">
+    <div class="rules-stats">
+        <span class="stat"><strong>{{ active_count }}</strong> aktive Regeln</span>
+        {% if total_count > active_count %}
+        <span class="stat muted">{{ total_count - active_count }} inaktiv</span>
+        {% endif %}
+    </div>
+    <div class="rules-filter">
+        {% if show_inactive %}
+        <a href="{{ url_for('rules') }}" class="btn btn-small">Nur aktive zeigen</a>
+        {% else %}
+        <a href="{{ url_for('rules', show_inactive='true') }}" class="btn btn-small btn-outline">Alle anzeigen</a>
+        {% endif %}
+    </div>
+</div>
+
+<p class="rules-info">
+    Diese Regeln wurden automatisch aus Benutzer-Feedback extrahiert und werden bei jeder Anfrage in den System-Prompt injiziert.
+</p>
+
+{% if rules %}
+<div class="rules-list">
+    {% for rule in rules %}
+    <div class="rule-card {% if not rule.is_active %}rule-inactive{% endif %}" data-rule-id="{{ rule.id }}">
+        <div class="rule-header">
+            <span class="rule-category category-{{ rule.category or 'unknown' }}">{{ rule.category or 'Unbekannt' }}</span>
+            <span class="rule-meta">
+                {% if rule.usage_count > 0 %}
+                <span class="usage-count" title="Anzahl der Verwendungen">{{ rule.usage_count }}x verwendet</span>
+                {% endif %}
+                <span class="confidence" title="Konfidenz">{{ (rule.confidence_score * 100)|int }}%</span>
+            </span>
+        </div>
+
+        <div class="rule-text">
+            {{ rule.rule_text }}
+        </div>
+
+        {% if rule.keywords %}
+        <div class="rule-keywords">
+            {% for keyword in rule.keywords %}
+            <span class="keyword">{{ keyword }}</span>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        <div class="rule-source">
+            <details>
+                <summary>Quelle anzeigen</summary>
+                <div class="source-content">
+                    <p><strong>Frage:</strong> {{ rule.source_question|truncate_text(200) if rule.source_question else '-' }}</p>
+                    <p><strong>Feedback:</strong> {{ rule.source_feedback or '-' }}</p>
+                    <p class="source-date">Erstellt: {{ rule.created_at|format_datetime }}</p>
+                </div>
+            </details>
+        </div>
+
+        <div class="rule-actions">
+            {% if rule.is_active %}
+            <button class="btn btn-small btn-outline" onclick="toggleRule({{ rule.id }}, false)">Deaktivieren</button>
+            {% else %}
+            <button class="btn btn-small btn-success" onclick="toggleRule({{ rule.id }}, true)">Aktivieren</button>
+            {% endif %}
+            <button class="btn btn-small btn-danger" onclick="deleteRule({{ rule.id }})">Loschen</button>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<p class="empty">
+    {% if show_inactive %}
+    Noch keine Regeln vorhanden. Regeln werden automatisch aus Benutzer-Feedback extrahiert.
+    {% else %}
+    Keine aktiven Regeln. <a href="{{ url_for('rules', show_inactive='true') }}">Inaktive Regeln anzeigen?</a>
+    {% endif %}
+</p>
+{% endif %}
+
+<script>
+async function toggleRule(ruleId, isActive) {
+    try {
+        const response = await fetch(`/api/rules/${ruleId}/toggle`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ is_active: isActive })
+        });
+        const data = await response.json();
+        if (data.success) {
+            location.reload();
+        } else {
+            alert('Fehler: ' + data.message);
+        }
+    } catch (error) {
+        alert('Fehler beim Andern der Regel');
+    }
+}
+
+async function deleteRule(ruleId) {
+    if (!confirm('Regel wirklich loschen? Diese Aktion kann nicht ruckgangig gemacht werden.')) {
+        return;
+    }
+    try {
+        const response = await fetch(`/api/rules/${ruleId}`, {
+            method: 'DELETE'
+        });
+        const data = await response.json();
+        if (data.success) {
+            document.querySelector(`[data-rule-id="${ruleId}"]`).remove();
+        } else {
+            alert('Fehler: ' + data.message);
+        }
+    } catch (error) {
+        alert('Fehler beim Loschen der Regel');
+    }
+}
+</script>
+
+<style>
+.rules-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+}
+
+.rules-stats .stat {
+    margin-right: 1rem;
+}
+
+.rules-stats .muted {
+    color: #666;
+}
+
+.rules-info {
+    background: #f0f7ff;
+    border-left: 4px solid #0066cc;
+    padding: 0.75rem 1rem;
+    margin-bottom: 1.5rem;
+    font-size: 0.9rem;
+}
+
+.rules-list {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.rule-card {
+    background: #fff;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    padding: 1rem;
+    transition: box-shadow 0.2s;
+}
+
+.rule-card:hover {
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+
+.rule-card.rule-inactive {
+    opacity: 0.6;
+    background: #f9f9f9;
+}
+
+.rule-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.5rem;
+}
+
+.rule-category {
+    font-size: 0.75rem;
+    padding: 0.2rem 0.5rem;
+    border-radius: 4px;
+    text-transform: uppercase;
+    font-weight: 600;
+}
+
+.category-output_format { background: #e3f2fd; color: #1565c0; }
+.category-data_display { background: #f3e5f5; color: #7b1fa2; }
+.category-behavior { background: #e8f5e9; color: #2e7d32; }
+.category-unknown { background: #f5f5f5; color: #666; }
+
+.rule-meta {
+    font-size: 0.8rem;
+    color: #666;
+}
+
+.rule-meta .usage-count {
+    margin-right: 0.75rem;
+    color: #0066cc;
+}
+
+.rule-text {
+    font-size: 1.1rem;
+    font-weight: 500;
+    margin: 0.75rem 0;
+    color: #333;
+}
+
+.rule-keywords {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin: 0.75rem 0;
+}
+
+.keyword {
+    background: #f0f0f0;
+    padding: 0.2rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.8rem;
+    color: #555;
+}
+
+.rule-source {
+    margin: 0.75rem 0;
+    font-size: 0.85rem;
+}
+
+.rule-source summary {
+    cursor: pointer;
+    color: #666;
+}
+
+.rule-source summary:hover {
+    color: #333;
+}
+
+.source-content {
+    margin-top: 0.5rem;
+    padding: 0.75rem;
+    background: #f9f9f9;
+    border-radius: 4px;
+}
+
+.source-content p {
+    margin: 0.25rem 0;
+}
+
+.source-date {
+    color: #888;
+    font-size: 0.8rem;
+    margin-top: 0.5rem !important;
+}
+
+.rule-actions {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 1rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid #eee;
+}
+
+.btn-success {
+    background: #28a745;
+    color: white;
+}
+
+.btn-success:hover {
+    background: #218838;
+}
+
+.btn-danger {
+    background: #dc3545;
+    color: white;
+}
+
+.btn-danger:hover {
+    background: #c82333;
+}
+
+.btn-outline {
+    background: transparent;
+    border: 1px solid #666;
+    color: #666;
+}
+
+.btn-outline:hover {
+    background: #f0f0f0;
+}
+</style>
+{% endblock %}

@@ -82,6 +82,21 @@ class ConversationContext:
         lines.append("- 'zeige mehr/details' = expand on previous results")
         lines.append("- Preserve active filters unless user explicitly changes them")
 
+        # Add specific guidance for comparison/recommendation follow-ups
+        if self.followup_type == "compare":
+            lines.append("")
+            lines.append("COMPARISON/RECOMMENDATION REQUEST DETECTED:")
+            lines.append("- User wants comparison or recommendation based on previous results")
+            lines.append("- You MUST use execute_sql to get data for comparison")
+            lines.append("- Compare the relevant attributes (e.g., Kette vs Mobil, manufacturers, specs)")
+            lines.append("- Use the previous query context to build your comparison query")
+        elif self.followup_type == "continuation":
+            lines.append("")
+            lines.append("CONTINUATION REQUEST DETECTED:")
+            lines.append("- User wants to continue with previous results")
+            lines.append("- Reference previous result IDs if available")
+            lines.append("- Apply new criteria to the previous result set")
+
         return "\n".join(lines)
 
 
@@ -94,6 +109,8 @@ FOLLOWUP_PATTERNS = {
         r"\bdie\s+alle\b",
         r"\bmit\s+\w+\b.*\?$",  # "mit Klimaanlage?"
         r"\bohne\s+\w+",  # "ohne X"
+        r"\bdie\s+maschine[n]?\b",  # "die Maschine(n)" - reference to previous
+        r"\bdas\s+gerät\b",  # "das Gerät" - reference to previous
     ],
     "detail": [
         r"\bzeige?\s+(mir\s+)?mehr\b",
@@ -111,6 +128,17 @@ FOLLOWUP_PATTERNS = {
         r"\bvergleiche?\b.*\bdavon\b",
         r"\bwelche[rs]?\s+.*\s+(besser|optimal|am\s+besten)\b",
         r"\bunterschied\b",
+        r"\bempfiehl\w*\b",  # "empfehlen", "empfiehlst" - recommendation request
+        r"\b(kette|mobil|rad)\s+(oder|vs)\s+(kette|mobil|rad)\b",  # "Kette oder Mobil"
+        r"\bwas\s+.*\b(besser|empfehlen)\b",  # "was ist besser", "was empfiehlst du"
+        r"\bsollte?\s+ich\b",  # "sollte ich" - asking for advice
+    ],
+    "continuation": [
+        r"\bich\s+(möchte|will|brauche)\s+(die|das|eine?n?)\b",  # "Ich möchte die/das/einen"
+        r"\bmieten\b.*\b(die|das|eine?n?)\b",  # "mieten die/das/einen"
+        r"\bkaufen\b.*\b(die|das|eine?n?)\b",  # "kaufen die/das/einen"
+        r"\bdamit\b",  # "damit" - with it (reference to previous)
+        r"\bdafür\b",  # "dafür" - for that (reference to previous)
     ],
 }
 
@@ -244,12 +272,26 @@ class ContextManager:
         """Detect if query is a follow-up and what type."""
         query_lower = query.lower()
 
+        # Find all matching types
+        matching_types = []
         for followup_type, patterns in FOLLOWUP_PATTERNS.items():
             for pattern in patterns:
                 if re.search(pattern, query_lower, re.IGNORECASE):
-                    return True, followup_type
+                    matching_types.append(followup_type)
+                    break  # Found match for this type, move to next type
 
-        return False, None
+        if not matching_types:
+            return False, None
+
+        # Priority order: compare > continuation > detail > count > filter
+        # (more specific types should take precedence)
+        priority = ["compare", "continuation", "detail", "count", "filter"]
+        for ptype in priority:
+            if ptype in matching_types:
+                return True, ptype
+
+        # Fallback to first match
+        return True, matching_types[0]
 
     def _extract_entities(self, query: str) -> List[str]:
         """Extract entity references from query."""

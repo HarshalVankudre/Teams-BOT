@@ -1,0 +1,125 @@
+manufacturer_id,code,name,full_name
+1,???,Sonstige,??? - Sonstige
+2,ABG,ABG,ABG - ABG
+3,AHL,Ahlmann,AHL - Ahlmann
+4,ALK,AL-KO,ALK - AL-KO
+5,AMM,Ammann,AMM - Ammann
+6,ATLA,Atlas,ATLA - Atlas
+7,ATLC,Atlas-Copco,ATLC - Atlas-Copco
+8,AUG,AUGER TORQUE,AUG - AUGER TORQUE
+9,BAU,Baumgärtner,BAU - Baumgärtner
+10,BEMA,Bema,BEMA - Bema
+11,BER,Bergmann,BER - Bergmann
+12,BJT,Brian James Trailers,BJT - Brian James Trailers
+13,BOA,Boart Longyear,BOA - Boart Longyear
+14,BOM,Bomag,BOM - Bomag
+15,BRN,Breining,BRN - Breining
+16,BSG,bsg Handels GmbH,BSG - bsg Handels GmbH
+17,CARD,Cardi,CARD - Cardi
+18,CAT,Caterpillar,CAT - Caterpillar
+19,CED,Cedima,CED - Cedima
+20,COM,Compair,COM - Compair
+21,CP,CP,CP - CP
+22,CTX,Containex,CTX - Containex
+23,DEE,John Deere,DEE - John Deere
+24,DEM,Demag,DEM - Demag
+25,DIT,Ditch Witch,DIT - Ditch Witch
+26,DMS,DMS,DMS - DMS
+27,DYNA,Dynapac,DYNA - Dynapac
+28,EGL,Egli,EGL - Egli
+29,END,Endress,END - Endress
+30,ENGC,Engcon,ENGC - Engcon
+31,EPI,Epiroc,EPI - Epiroc
+32,FORD,Ford,FORD - Ford
+33,FORM,Format,FORM - Format
+34,FUR,Furukawa,FUR - Furukawa
+35,GEKO,GEKO,GEKO - GEKO
+36,GEN,Genie,GEN - Genie
+37,GRÜ,Grünig,GRÜ - Grünig
+38,GRÜN,GRÜN GmbH,GRÜN - GRÜN GmbH
+39,HAM,Hamm,HAM - Hamm
+40,HBM,HBM NOBAS,HBM - HBM NOBAS
+41,HEN,Henle,HEN - Henle
+42,HEY,Heylo,HEY - Heylo
+43,HGT,Hydraulikgreifer-Technologie GmbH,HGT - Hydraulikgreifer-Technologie GmbH
+44,HIM,HIMOINSA,HIM - HIMOINSA
+45,HIT,Hitachi,HIT - Hitachi
+46,HKS,HKS,HKS - HKS
+47,HUF,Hufgard,HUF - Hufgard
+48,HUL,Hulco,HUL - Hulco
+49,HYD,Hydrema,HYD - Hydrema
+50,HYS,Hyster,HYS - Hyster
+51,HYU,Hyundai,HYU - Hyundai
+52,JCB,Jcb,JCB - Jcb
+53,JUN,Jungheinrich,JUN - Jungheinrich
+54,KAE,Kaeser,KAE - Kaeser
+55,KIN,Kinshofer,KIN - Kinshofer
+56,KLE,Kleemann,KLE - Kleemann
+57,KOB,Kobelco,KOB - Kobelco
+58,KOMAT,Komatsu,KOMAT - Komatsu
+59,KOR,Korte,KOR - Korte
+60,KRAL,Kramer Allrad,KRAL - Kramer Allrad
+61,KRO,Kroll,KRO - Kroll
+62,KRU,Krupp,KRU - Krupp
+63,KRÄ,Kränzle,KRÄ - Kränzle
+64,KSG,KSG,KSG - KSG
+65,KSW,Ksw,KSW - Ksw
+66,KUB,Kubota,KUB - Kubota
+67,KWA,Kwanglim,KWA - Kwanglim
+68,LEH,Lehnhoff,LEH - Lehnhoff
+69,LIE,Liebherr,LIE - Liebherr
+70,MAE,MAEDA,MAE - MAEDA
+71,MAN,MAN,MAN - MAN
+72,MANI,Manitou,MANI - Manitou
+73,MBU,MBU,MBU - MBU
+74,MCC,McCloskey,MCC - McCloskey
+75,MERC,Mercedes-Benz,MERC - Mercedes-Benz
+76,MERL,Merlo,MERL - Merlo
+77,MOB,Moba,MOB - Moba
+78,MTS,MTS,MTS - MTS
+79,MÜL,Müller Mitteltal,MÜL - Müller Mitteltal
+80,NEU,Neuson,NEU - Neuson
+81,NEW,New Holland,NEW - New Holland
+82,NIF,Niftylift,NIF - Niftylift
+83,NIL,Nilfisk Alto,NIL - Nilfisk Alto
+84,NOZ,NOZAR,NOZ - NOZAR
+85,OIL,Oilquick,OIL - Oilquick
+86,OPEL,Opel,OPEL - Opel
+87,OUK,O&K,OUK - O&K
+88,PAU,Paus,PAU - Paus
+89,POTA,Potain,POTA - Potain
+90,RAM,Rammax,RAM - Rammax
+91,REN,Renault,REN - Renault
+92,RES,Reschke,RES - Reschke
+93,ROTO,Rototilt,ROTO - Rototilt
+94,RÜKO,RÜKO,RÜKO - RÜKO
+95,SCAE,Schaeff,SCAE - Schaeff
+96,SEN,Sennebogen,SEN - Sennebogen
+97,SIT,Sitech,SIT - Sitech
+98,SKOD,Skoda,SKOD - Skoda
+99,SMP,SMP,SMP - SMP
+100,SOB,Sobernheimer,SOB - Sobernheimer
+101,STE,Steelwrist,STE - Steelwrist
+102,STEH,Stehr,STEH - Stehr
+103,STIH,Stihl,STIH - Stihl
+104,STRA,Straßmayr,STRA - Straßmayr
+105,STRE,Streumaster,STRE - Streumaster
+106,TAK,Takeuchi,TAK - Takeuchi
+107,TESL,Tesla,TESL - Tesla
+108,THE,Theis,THE - Theis
+109,THW,Thwaites,THW - Thwaites
+110,TRA,Tracto-Technik,TRA - Tracto-Technik
+111,TRB,Trimble,TRB - Trimble
+112,TSI,TS Industrie,TSI - TS Industrie
+113,TUC,Tuchel,TUC - Tuchel
+114,VOL,Volvo,VOL - Volvo
+115,VW,Volkswagen,VW - Volkswagen
+116,VÖG,Vögele,VÖG - Vögele
+117,WAC,Wacker Neuson,WAC - Wacker Neuson
+118,WEB,Weber mt,WEB - Weber mt
+119,WEBE,Weber Stahl,WEBE - Weber Stahl
+120,WEIR,Weiro,WEIR - Weiro
+121,WIR,Wirtgen,WIR - Wirtgen
+122,YAN,Yanmar,YAN - Yanmar
+123,ZEP,Zeppelin,ZEP - Zeppelin
+124,ZFE,ZFE GmbH,ZFE - ZFE GmbH

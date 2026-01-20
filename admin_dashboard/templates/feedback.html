@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+
+{% block title %}Feedback{% endblock %}
+
+{% block content %}
+<h1>Benutzer-Feedback</h1>
+
+<div class="search-bar">
+    <form method="get" action="{{ url_for('feedback') }}">
+        <input type="text" name="search" placeholder="Suchen nach Name oder Feedback-Text..." value="{{ search }}">
+        <button type="submit">Suchen</button>
+        {% if search %}
+        <a href="{{ url_for('feedback') }}" class="clear-search">Zurucksetzen</a>
+        {% endif %}
+    </form>
+</div>
+
+{% if feedback_list %}
+<div class="feedback-entries">
+    {% for fb in feedback_list %}
+    <div class="feedback-entry">
+        <div class="feedback-header">
+            <strong>{{ fb.display_name or 'Unbekannt' }}</strong>
+            {% if fb.email %}
+            <span class="email">({{ fb.email }})</span>
+            {% endif %}
+            <span class="timestamp">{{ fb.feedback_at|format_datetime }}</span>
+        </div>
+
+        <div class="feedback-conversation">
+            <div class="qa-pair">
+                <div class="question">
+                    <span class="label">Frage:</span>
+                    <p>{{ fb.user_question|truncate_text(200) if fb.user_question else '-' }}</p>
+                </div>
+                <div class="answer">
+                    <span class="label">Antwort:</span>
+                    <p>{{ fb.assistant_response|truncate_text(300) }}</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="feedback-content-box">
+            <span class="label">Feedback:</span>
+            <p class="feedback-text-large">{{ fb.feedback }}</p>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<div class="pagination">
+    {% if page > 1 %}
+    <a href="{{ url_for('feedback', page=page-1, search=search) }}">&laquo; Zuruck</a>
+    {% endif %}
+    <span>Seite {{ page }} von {{ total_pages }}</span>
+    {% if page < total_pages %}
+    <a href="{{ url_for('feedback', page=page+1, search=search) }}">Weiter &raquo;</a>
+    {% endif %}
+</div>
+{% else %}
+<p class="empty">{% if search %}Kein Feedback gefunden für "{{ search }}"{% else %}Noch kein Feedback erhalten{% endif %}</p>
+{% endif %}
+{% endblock %}

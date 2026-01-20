@@ -16,6 +16,9 @@ tavily-python>=0.5.0
 
 # PostgreSQL for hybrid RAG queries
 psycopg2-binary>=2.9.9
+
+# Admin Dashboard
+flask>=3.0.0
 sqlglot>=23.0.0
 
 # PDF and document processing

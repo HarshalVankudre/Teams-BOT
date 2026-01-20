@@ -104,7 +104,7 @@ Gib NUR valides JSON zurück, keine zusätzlichen Erklärungen."""
                     {"role": "user", "content": user_prompt}
                 ],
                 "text": {"format": {"type": "json_object"}},
-                "max_output_tokens": 4000
+                "max_output_tokens": config.chunking_max_output_tokens
             }
             if self.reasoning_effort and self.reasoning_effort != "none":
                 request_params["reasoning"] = {"effort": self.reasoning_effort}

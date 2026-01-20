@@ -1,0 +1,21 @@
+unit_id,code,name,full_name
+1,%,Prozent,% - Prozent
+2,A,Ampere,A - Ampere
+3,Hz,Herz,Hz - Herz
+4,U/min,Umdrehungen pro Minute,U/min - Umdrehungen pro Minute
+5,V,Volt,V - Volt
+6,bar,Bar,bar - Bar
+7,g/km,Gramm pro kilometer,g/km - Gramm pro kilometer
+8,kNm,Kilonewtonmeter,kNm - Kilonewtonmeter
+9,kVA,Kilovoltampere,kVA - Kilovoltampere
+10,kW,Kilowatt,kW - Kilowatt
+11,kg,Kilogramm,kg - Kilogramm
+12,km/h,Kilometer pro Stunde,km/h - Kilometer pro Stunde
+13,l/min,Liter pro Minute,l/min - Liter pro Minute
+14,m,Meter,m - Meter
+15,mm,Millimeter,mm - Millimeter
+16,m³,Kubikmeter,m³ - Kubikmeter
+17,std,Stunde(n),std - Stunde(n)
+18,stk,Stück,stk - Stück
+19,t,Tonne(n),t - Tonne(n)
+20,t/h,Tonnen pro Stunde,t/h - Tonnen pro Stunde

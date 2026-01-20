@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+
+{% block title %}Ubersicht{% endblock %}
+
+{% block content %}
+<h1>Dashboard Ubersicht</h1>
+
+<div class="stats-grid">
+    <div class="stat-card">
+        <div class="stat-value">{{ stats.total_conversations or 0 }}</div>
+        <div class="stat-label">Gesprache gesamt</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value">{{ stats.total_users or 0 }}</div>
+        <div class="stat-label">Benutzer</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value">{{ stats.total_messages or 0 }}</div>
+        <div class="stat-label">Nachrichten gesamt</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value">{{ stats.messages_today or 0 }}</div>
+        <div class="stat-label">Nachrichten heute</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value">{{ stats.messages_this_week or 0 }}</div>
+        <div class="stat-label">Diese Woche</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value">{{ stats.avg_response_time_ms|format_ms }}</div>
+        <div class="stat-label">Avg. Antwortzeit</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value">{{ stats.total_feedback or 0 }}</div>
+        <div class="stat-label">Feedback erhalten</div>
+    </div>
+</div>
+
+<div class="two-columns">
+    <div class="panel">
+        <h2>Letzte Gesprache</h2>
+        {% if stats.recent_conversations %}
+        <ul class="recent-list">
+            {% for conv in stats.recent_conversations %}
+            <li>
+                <a href="{{ url_for('conversation_detail', conversation_id=conv.id) }}">
+                    <strong>{{ conv.display_name or 'Unbekannt' }}</strong>
+                    <span class="preview">{{ conv.first_message|truncate_text(50) }}</span>
+                    <span class="time">{{ conv.last_message_at|format_datetime }}</span>
+                </a>
+            </li>
+            {% endfor %}
+        </ul>
+        <a href="{{ url_for('conversations') }}" class="view-all">Alle anzeigen</a>
+        {% else %}
+        <p class="empty">Noch keine Gesprache</p>
+        {% endif %}
+    </div>
+
+    <div class="panel">
+        <h2>Letztes Feedback</h2>
+        {% if stats.recent_feedback %}
+        <ul class="recent-list">
+            {% for fb in stats.recent_feedback %}
+            <li>
+                <div class="feedback-item">
+                    <strong>{{ fb.display_name or 'Unbekannt' }}</strong>
+                    <span class="feedback-text">{{ fb.feedback|truncate_text(80) }}</span>
+                    <span class="time">{{ fb.feedback_at|format_datetime }}</span>
+                </div>
+            </li>
+            {% endfor %}
+        </ul>
+        <a href="{{ url_for('feedback') }}" class="view-all">Alle anzeigen</a>
+        {% else %}
+        <p class="empty">Noch kein Feedback</p>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

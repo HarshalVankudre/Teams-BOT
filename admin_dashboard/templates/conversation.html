@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+
+{% block title %}Gesprach #{{ conversation.id }}{% endblock %}
+
+{% block content %}
+<div class="conversation-header">
+    <a href="{{ url_for('conversations') }}" class="back-link">&laquo; Zuruck zu Gesprachen</a>
+    <h1>Gesprach mit {{ conversation.display_name or 'Unbekannt' }}</h1>
+</div>
+
+<div class="user-info-card">
+    <div class="user-details">
+        <div><strong>Name:</strong> {{ conversation.display_name or 'Unbekannt' }}</div>
+        <div><strong>E-Mail:</strong> {{ conversation.email or '-' }}</div>
+        <div><strong>Erste Aktivitat:</strong> {{ conversation.first_seen|format_datetime }}</div>
+        <div><strong>Letzte Aktivitat:</strong> {{ conversation.last_active|format_datetime }}</div>
+        <div><strong>Nachrichten in diesem Gesprach:</strong> {{ conversation.message_count }}</div>
+    </div>
+</div>
+
+<div class="chat-container">
+    {% for msg in messages %}
+    <div class="message {{ msg.role }}">
+        <div class="message-header">
+            <span class="role-label">{{ 'Benutzer' if msg.role == 'user' else 'Assistent' }}</span>
+            <span class="timestamp">{{ msg.created_at|format_datetime }}</span>
+            {% if msg.response_time_ms %}
+            <span class="response-time">({{ msg.response_time_ms|format_ms }})</span>
+            {% endif %}
+        </div>
+        <div class="message-content">{{ msg.content }}</div>
+
+        {% if msg.sql_query %}
+        <div class="message-meta">
+            <details>
+                <summary>SQL-Abfrage anzeigen</summary>
+                <pre class="sql-query">{{ msg.sql_query }}</pre>
+                {% if msg.sql_results_count is not none %}
+                <p><small>{{ msg.sql_results_count }} Ergebnisse</small></p>
+                {% endif %}
+            </details>
+        </div>
+        {% endif %}
+
+        {% if msg.tools_used %}
+        <div class="message-meta">
+            <small>Tools: {{ msg.tools_used|join(', ') }}</small>
+        </div>
+        {% endif %}
+
+        {% if msg.error %}
+        <div class="message-error">
+            <strong>Fehler:</strong> {{ msg.error }}
+        </div>
+        {% endif %}
+
+        {% if msg.feedback %}
+        <div class="feedback-box">
+            <div class="feedback-label">Feedback vom Benutzer:</div>
+            <div class="feedback-content">{{ msg.feedback }}</div>
+            <div class="feedback-time">{{ msg.feedback_at|format_datetime }}</div>
+        </div>
+        {% endif %}
+    </div>
+    {% endfor %}
+</div>
+{% endblock %}

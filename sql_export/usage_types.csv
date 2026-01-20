@@ -1,0 +1,6 @@
+usage_type_id,code,name,full_name
+1,EXG,Externes Gerät,EXG - Externes Gerät
+2,FP,Fuhrpark,FP - Fuhrpark
+3,MIET,Vermietung,MIET - Vermietung
+4,VK,Verkauf,VK - Verkauf
+5,k,keine,k - keine

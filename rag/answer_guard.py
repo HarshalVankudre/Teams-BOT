@@ -42,6 +42,7 @@ class AnswerContext:
     sources: List[Dict[str, Any]]
     equipment_table: Optional[str]
     intent: Optional[Any] = None
+    has_conversation_history: bool = False
 
 
 @dataclass
@@ -92,16 +93,15 @@ class AnswerGuard:
             if "validation" in error_preview.lower():
                 return GuardedResponse(
                     response=(
-                        "Die Abfrage passt nicht zu den geforderten Kriterien. "
-                        "Bitte praezisieren Sie Ihre Anfrage."
+                        "Entschuldigung, diese Anfrage konnte ich leider nicht verarbeiten. "
+                        "Koennten Sie Ihre Frage etwas anders formulieren?"
                     ),
                     issues=issues,
                 )
             return GuardedResponse(
                 response=(
-                    "Die Datenbankabfrage konnte nicht ausgefuehrt werden. "
-                    f"Details: {error_preview} "
-                    "Bitte praezisieren Sie Ihre Anfrage."
+                    "Entschuldigung, bei der Datenbankabfrage ist ein Problem aufgetreten. "
+                    "Koennten Sie Ihre Frage etwas anders formulieren oder weitere Details nennen?"
                 ),
                 issues=issues,
             )
@@ -110,7 +110,7 @@ class AnswerGuard:
             issues.append("clarification")
             clarification = getattr(context.intent, "clarification", None)
             return GuardedResponse(
-                response=clarification or "Bitte praezisieren Sie Ihre Anfrage.",
+                response=clarification or "Koennten Sie mir bitte etwas mehr Details zu Ihrer Anfrage geben?",
                 issues=issues,
             )
 
@@ -118,9 +118,9 @@ class AnswerGuard:
             issues.append("no_data")
             return GuardedResponse(
                 response=(
-                    "Ich kann nur mit internen Daten (SQL + Pinecone) antworten. "
-                    "In den internen Datenbanken wurde keine Information gefunden. "
-                    "Gibt es einen Hersteller, Maschinentyp oder weitere Kriterien?"
+                    "Leider habe ich dazu keine Informationen in den internen Datenbanken gefunden. "
+                    "Moechten Sie die Suche mit anderen Kriterien versuchen? "
+                    "Zum Beispiel: Hersteller, Maschinentyp oder Einsatzgebiet?"
                 ),
                 issues=issues,
             )
@@ -163,6 +163,9 @@ class AnswerGuard:
         # General/help questions don't need data lookup
         if self._is_help_question(normalized_query):
             return False
+        # If conversation history exists, trust LLM to use context for follow-up questions
+        if context.has_conversation_history:
+            return False
         return True
 
     def _is_help_question(self, normalized_query: str) -> bool:
@@ -184,12 +187,12 @@ class AnswerGuard:
                     kept += 1
                 trimmed_lines.append(line)
             text = "\n".join(trimmed_lines).strip()
-            text += "\nWeitere Details auf Anfrage."
+            text += "\n\nSoll ich Ihnen weitere Details zeigen?"
 
         sentences = _SENTENCE_SPLIT_RE.split(text)
         if len(sentences) > self.max_sentences:
             text = " ".join(sentences[: self.max_sentences]).strip()
-            text += " Weitere Details auf Anfrage."
+            text += " Soll ich mehr Details zeigen?"
 
         if len(text) > self.max_chars:
             text = text[: self.max_chars].rstrip() + "..."

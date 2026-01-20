@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Admin Dashboard{% endblock %} - RUEKO Bot</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">RUEKO Admin</div>
+        <div class="nav-links">
+            <a href="{{ url_for('index') }}" class="{% if request.endpoint == 'index' %}active{% endif %}">Ubersicht</a>
+            <a href="{{ url_for('conversations') }}" class="{% if request.endpoint in ['conversations', 'conversation_detail'] %}active{% endif %}">Gesprache</a>
+            <a href="{{ url_for('users') }}" class="{% if request.endpoint == 'users' %}active{% endif %}">Benutzer</a>
+            <a href="{{ url_for('feedback') }}" class="{% if request.endpoint == 'feedback' %}active{% endif %}">Feedback</a>
+            <a href="{{ url_for('rules') }}" class="{% if request.endpoint == 'rules' %}active{% endif %}">Regeln</a>
+        </div>
+    </nav>
+
+    <main class="container">
+        {% block content %}{% endblock %}
+    </main>
+
+    <footer class="footer">
+        <p>RUEKO Bot Admin Dashboard</p>
+    </footer>
+</body>
+</html>
