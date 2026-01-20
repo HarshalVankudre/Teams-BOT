@@ -80,6 +80,7 @@ _STRUCTURED_RE = re.compile(
 _RENTAL_RE = re.compile(r"\b(miet|vermiet|rental|rent)")
 _SALES_RE = re.compile(r"\b(verkauf|vk|sale|buy|kauf)")
 _AVAIL_RE = re.compile(r"\b(verfugbar|available|released|frei)")
+_NULL_RE = re.compile(r"\b(ohne|keine|null)\b")
 
 
 def _normalize_text(text: str) -> str:

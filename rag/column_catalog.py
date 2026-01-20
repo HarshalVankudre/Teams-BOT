@@ -121,9 +121,13 @@ class ColumnCatalog:
         # Clean display name (remove unit suffix)
         display_name = re.sub(r'\s*\[[^\]]+\]', '', name).strip()
 
-        # Generate column name: prop_e1740_grabtiefe_mm
+        # Generate column name: prop_e1740_grabtiefe_mm (include unit in column name)
         slug = self._slugify(name)
-        column_name = f"prop_{code.lower()}_{slug}"
+        if unit:
+            unit_slug = unit.lower().replace("/", "_").replace("³", "3")
+            column_name = f"prop_{code.lower()}_{slug}_{unit_slug}"
+        else:
+            column_name = f"prop_{code.lower()}_{slug}"
 
         # Determine category and data type
         category, data_type, parse_hint = self._categorize_column(name, unit)
