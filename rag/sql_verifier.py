@@ -6,7 +6,7 @@ Catches common errors and suggests corrections.
 """
 import re
 import logging
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Any, Optional, List
 from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
@@ -63,8 +63,8 @@ class SQLVerifier:
     """
     Verifies SQL queries before execution.
 
-    Performs both pattern-based checks and optional LLM-based verification
-    for complex queries.
+    Focuses on safety checks only. Column selection is handled by the LLM
+    using ColumnCatalog - no column validation needed here.
     """
 
     def __init__(
@@ -75,23 +75,8 @@ class SQLVerifier:
         use_llm_verification: bool = False
     ):
         self.equipment_table = equipment_table
-        self._column_resolver = column_resolver
         self._provider = provider
         self._use_llm = use_llm_verification
-        self._cached_columns: Optional[Dict[str, str]] = None
-
-    def _get_columns(self) -> Dict[str, str]:
-        """Get available columns."""
-        if self._cached_columns is not None:
-            return self._cached_columns
-        if self._column_resolver:
-            try:
-                self._cached_columns = self._column_resolver() or {}
-            except Exception:
-                self._cached_columns = {}
-        else:
-            self._cached_columns = {}
-        return self._cached_columns
 
     def verify(
         self,
@@ -143,59 +128,24 @@ class SQLVerifier:
                 result.issues.append(msg)
                 result.confidence = 0.0
 
-        # Check column references
-        columns = self._get_columns()
-        if columns:
-            referenced = self._extract_column_refs(sql)
-            unknown = []
-            for col in referenced:
-                if col.lower() not in {c.lower() for c in columns.keys()}:
-                    # Skip known SQL keywords and functions
-                    if col.lower() not in {"count", "sum", "avg", "max", "min", "coalesce", "nullif", "cast", "as"}:
-                        unknown.append(col)
-
-            if unknown:
-                result.issues.append(f"Unknown columns: {', '.join(unknown[:5])}")
-                result.confidence = max(0.5, result.confidence - 0.2 * len(unknown))
+        # NOTE: Column validation removed - LLM uses ColumnCatalog for correct column selection
 
         # Check for missing LIMIT on potentially large queries
         if "limit" not in sql_lower and "count(" not in sql_lower:
             if "select" in sql_lower and "from" in sql_lower:
                 result.suggestions.append("Consider adding LIMIT to prevent large result sets")
 
-        # Verify table reference
+        # Verify table reference (suggestion only)
         if self.equipment_table:
             table_name = self.equipment_table.split(".")[-1].lower()
             if table_name not in sql_lower and "equipment" not in sql_lower:
-                result.issues.append(f"Query doesn't reference expected table {self.equipment_table}")
-                result.confidence *= 0.8
+                # Only warn if this doesn't look like a schema query
+                if "information_schema" not in sql_lower and "pg_" not in sql_lower:
+                    result.suggestions.append(f"Query may not reference {self.equipment_table}")
 
-        # Calculate final validity
-        if result.issues and not result.corrected_sql:
-            result.confidence = max(0.3, result.confidence - 0.15 * len(result.issues))
-
-        if result.confidence < 0.5:
-            result.is_valid = False
-
+        # is_valid is only False if explicitly set (unsafe patterns)
+        # suggestions and warnings don't make queries invalid
         return result
-
-    def _extract_column_refs(self, sql: str) -> List[str]:
-        """Extract column references from SQL."""
-        # Simple extraction - get words that look like column names
-        tokens = re.findall(r"\b([a-zA-Z_][a-zA-Z0-9_]*)\b", sql)
-
-        # Filter out SQL keywords
-        keywords = {
-            "select", "from", "where", "and", "or", "not", "in", "is", "null",
-            "true", "false", "like", "ilike", "between", "case", "when", "then",
-            "else", "end", "as", "on", "join", "left", "right", "inner", "outer",
-            "group", "by", "order", "asc", "desc", "limit", "offset", "having",
-            "distinct", "count", "sum", "avg", "max", "min", "coalesce", "nullif",
-            "cast", "numeric", "integer", "text", "boolean", "double", "precision",
-            "fetch", "first", "rows", "only", "with", "union", "all", "exists"
-        }
-
-        return [t for t in tokens if t.lower() not in keywords]
 
     async def verify_with_llm(
         self,
