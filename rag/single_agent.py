@@ -22,7 +22,7 @@ from .schema import SQL_AGENT_SCHEMA
 from .postgres import PostgresService
 from .sql_guard import SQLGuard, SQLIntent
 from .answer_guard import AnswerGuard, AnswerContext
-from .property_resolver import create_property_resolver
+from .column_catalog import column_catalog
 from .planning import QueryPlanner, QueryPlan
 from .sql_verifier import SQLVerifier
 from .reasoning_tools import reasoning_tools, REASONING_TOOL_DEFINITIONS
@@ -225,15 +225,15 @@ Nutze stattdessen geraetegruppe_name fuer Kette/Rad-Unterscheidung bei Fertigern
         self.model = self.provider.model
         self.postgres = PostgresService()
         self.pinecone = pinecone_service
-        
-        # Initialize property resolver for dynamic column name resolution
-        self.property_resolver = create_property_resolver(self.postgres)
-        
+
+        # Initialize column catalog for semantic column resolution (loads once, cached)
+        column_catalog.initialize(self.postgres)
+        self._log(f"ColumnCatalog initialized with {len(column_catalog.get_all_columns())} property columns")
+
         # SQL guard with lenient validation (strict_validation=False)
         self.sql_guard = SQLGuard(
             equipment_table=self.postgres.equipment_table,
             column_resolver=self.postgres.get_column_info,
-            property_resolver=self.property_resolver,
             strict_validation=False,  # Lenient mode - warnings instead of errors
         )
         
@@ -640,6 +640,10 @@ Nutze stattdessen geraetegruppe_name fuer Kette/Rad-Unterscheidung bei Fertigern
         system_prompt = self.SYSTEM_PROMPT
         if system_instructions:
             system_prompt = f"{system_instructions}\n\n---\n\n{self.SYSTEM_PROMPT}"
+
+        # Add column catalog for semantic column resolution (cached, loaded once at startup)
+        column_catalog_section = column_catalog.get_prompt_section()
+        system_prompt = f"{system_prompt}\n\n{column_catalog_section}"
 
         # Inject learned rules from user feedback at the start of system prompt
         try:
