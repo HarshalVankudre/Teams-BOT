@@ -11,7 +11,16 @@ load_dotenv()
 
 @dataclass
 class RAGConfig:
-    """Configuration for the RAG pipeline - all from .env"""
+    """
+    Configuration for the RAG pipeline - all from .env
+
+    Enhanced Agent Features:
+        AGENT_ENABLE_PLANNING: Enable query planning before execution (default: true)
+        AGENT_ENABLE_SQL_VERIFICATION: Enable SQL verification/autocorrection (default: true)
+        AGENT_ENABLE_REASONING_TOOLS: Enable calculate/compare/aggregate tools (default: true)
+        AGENT_PLANNING_MODEL: Model for planning (empty = use main model)
+        AGENT_VERIFICATION_MODEL: Model for SQL verification (empty = use main model)
+    """
 
     # LLM Provider: "openai" or "gemini"
     llm_provider: str = os.getenv("LLM_PROVIDER", "openai")
