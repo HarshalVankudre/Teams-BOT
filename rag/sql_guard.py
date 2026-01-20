@@ -33,6 +33,7 @@ _CONTEXT_REF_RE = re.compile(
     r"oben\s+genannte[nr]?"
     r")\b"
 )
+
 _COUNT_RE = re.compile(r"\b(wie\s+viele|anzahl|count)\b")
 _GROUP_BY_RE = re.compile(
     r"\b(pro|nach)\s+(hersteller|manufacturer|gerategruppe|geraetegruppe|gruppe|verwendung)\b"
@@ -44,23 +45,41 @@ _DOC_RE = re.compile(
     r"\b("
     r"handbuch|anleitung|dokument|manual|pdf|richtlinie|policy|"
     r"agb|vereinbarung(?:en)?|formular(?:e)?|vorlage(?:n)?|"
-    r"\w*vertrag(?:e|en|s)?"
+    r"\w*vertrag(?:e|en|s)?|"
+    # Extended patterns for internal documentation
+    r"beschreibung|erklaer|erklar|info(?:rmation)?|hinweis|"
+    r"bedienung|betrieb|wartung|service|reparatur|"
+    r"sicherheit|vorschrift|regel|prozess|ablauf|"
+    r"spezifikation|technisch|datenblatt|katalog"
     r")\b"
 )
+
+# Pattern for queries that might benefit from document search as supplement
+_DOC_SUPPLEMENT_RE = re.compile(
+    r"\b("
+    r"wie\s+funktioniert|was\s+ist|was\s+bedeutet|"
+    r"warum|wozu|wofuer|wof[uü]r|"
+    r"erklaer|erklar|beschreib|definition|"
+    r"unterschied|vergleich|"
+    r"problem|fehler|stoerung|st[oö]rung|defekt|"
+    r"hilfe|support|loesung|l[oö]sung"
+    r")\b"
+)
+# Equipment-related query patterns - LLM handles actual column selection via ColumnCatalog
 _STRUCTURED_RE = re.compile(
     r"\b(seriennummer|inventarnummer|hersteller|maschine|maschinen|"
     r"gerat|gerate|geraet|geraete|"
-    r"miet|vermiet|verkauf|klimaanlage|prop_|nuclos)\b"
+    r"bagger|fertiger|walze|kran|radlader|dumper|stapler|"
+    r"miet|vermiet|verkauf|klimaanlage|prop_|nuclos|"
+    # Property-related terms (LLM picks correct columns)
+    r"grabtiefe|reichweite|tragkraft|hubhoehe|hubhöhe|"
+    r"arbeitsbreite|einbaubreite|motorleistung|gewicht|"
+    r"fahrgeschwindigkeit|nutzlast|breite|tiefe|hoehe|höhe|"
+    r"leistung|schwer|meter|mm|kg|kw)\b"
 )
 _RENTAL_RE = re.compile(r"\b(miet|vermiet|rental|rent)")
 _SALES_RE = re.compile(r"\b(verkauf|vk|sale|buy|kauf)")
 _AVAIL_RE = re.compile(r"\b(verfugbar|available|released|frei)")
-_NULL_RE = re.compile(r"\b(ohne|keine|null)\b")
-_AC_RE = re.compile(r"\b(klimaanlage|klima)\b")
-_WEIGHT_RE = re.compile(r"\b(gewicht|schwer)\b")
-_HEAVIEST_RE = re.compile(r"\b(schwerst|schwersten|heaviest)\b")
-_POWER_RE = re.compile(r"\b(leistung|motorleistung|kw)\b")
-_WIDTH_RE = re.compile(r"\b(einbaubreite|arbeitsbreite)\b")
 
 
 def _normalize_text(text: str) -> str:
@@ -97,6 +116,8 @@ class SQLIntent:
     required_constraints: List[SQLConstraint] = field(default_factory=list)
     followup_ids: List[Any] = field(default_factory=list)
     clarification: Optional[str] = None
+    # New: documents can supplement SQL results (SQL first, then docs)
+    documents_as_supplement: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -104,6 +125,7 @@ class SQLIntent:
             "requires_sql": self.requires_sql,
             "prefers_sql": self.prefers_sql,
             "prefers_documents": self.prefers_documents,
+            "documents_as_supplement": self.documents_as_supplement,
             "request_type": self.request_type,
             "requested_limit": self.requested_limit,
             "required_constraints": [c.name for c in self.required_constraints],
@@ -184,6 +206,8 @@ class SQLGuard:
             return True
         if thread_state.get("last_user_message"):
             return True
+        if thread_state.get("last_assistant_response"):
+            return True
         return False
 
     def _intent_requires_sql(self, normalized_query: str) -> bool:
@@ -196,8 +220,19 @@ class SQLGuard:
     def _intent_prefers_documents(self, normalized_query: str) -> bool:
         return bool(_DOC_RE.search(normalized_query))
 
+    def _intent_documents_as_supplement(self, normalized_query: str) -> bool:
+        """Check if query might benefit from document search as supplement to SQL."""
+        # If it's primarily a document query, not a supplement case
+        if _DOC_RE.search(normalized_query) and not _STRUCTURED_RE.search(normalized_query):
+            return False
+        # Check for explanatory/help-seeking patterns
+        return bool(_DOC_SUPPLEMENT_RE.search(normalized_query))
+
     def _intent_prefers_sql(self, normalized_query: str) -> bool:
-        return bool(_STRUCTURED_RE.search(normalized_query) or _COUNT_RE.search(normalized_query))
+        return bool(
+            _STRUCTURED_RE.search(normalized_query) or
+            _COUNT_RE.search(normalized_query)
+        )
 
     def extract_intent(
         self,
@@ -210,12 +245,14 @@ class SQLGuard:
         requires_sql = self._intent_requires_sql(normalized_query)
         prefers_sql = self._intent_prefers_sql(normalized_query)
         prefers_documents = self._intent_prefers_documents(normalized_query)
+        documents_as_supplement = self._intent_documents_as_supplement(normalized_query)
         doc_query = prefers_documents
         intent = SQLIntent(
             query=user_query,
             requires_sql=requires_sql,
             prefers_sql=prefers_sql,
             prefers_documents=prefers_documents,
+            documents_as_supplement=documents_as_supplement,
         )
 
         if not doc_query:
@@ -302,67 +339,8 @@ class SQLGuard:
                     )
                 )
 
-            if _AC_RE.search(normalized_query):
-                intent.required_constraints.append(
-                    SQLConstraint(
-                        name="prop_klimaanlage",
-                        description="Filter by Klimaanlage when requested.",
-                        patterns=[
-                            re.compile(r"\bprop_klimaanlage\b", re.IGNORECASE),
-                            re.compile(r"\bprop_e1930_klimaanlage\b", re.IGNORECASE),
-                        ],
-                    )
-                )
-
-            if _WEIGHT_RE.search(normalized_query):
-                intent.required_constraints.append(
-                    SQLConstraint(
-                        name="prop_gewicht",
-                        description="Use prop_gewicht for weight-related questions.",
-                        patterns=[
-                            re.compile(r"\bprop_gewicht\b", re.IGNORECASE),
-                            re.compile(r"\bprop_e1730_gewicht_kg\b", re.IGNORECASE),
-                        ],
-                    )
-                )
-
-            if _HEAVIEST_RE.search(normalized_query):
-                intent.required_constraints.append(
-                    SQLConstraint(
-                        name="order_by_weight_desc",
-                        description="Order by prop_gewicht DESC for heaviest requests.",
-                        patterns=[re.compile(r"\border\s+by\s+prop_gewicht\s+desc\b", re.IGNORECASE)],
-                    )
-                )
-
-            if _POWER_RE.search(normalized_query):
-                intent.required_constraints.append(
-                    SQLConstraint(
-                        name="prop_motor_leistung",
-                        description="Use prop_motor_leistung for power-related questions.",
-                        patterns=[
-                            re.compile(r"\bprop_motor_leistung\b", re.IGNORECASE),
-                            re.compile(r"\bprop_e2180_motor_leistung_kw\b", re.IGNORECASE),
-                        ],
-                    )
-                )
-
-            if _WIDTH_RE.search(normalized_query):
-                intent.required_constraints.append(
-                    SQLConstraint(
-                        name="width_columns",
-                        description="Use width columns (prop_einbaubreite_max or prop_arbeitsbreite).",
-                        patterns=[
-                            re.compile(r"\bprop_einbaubreite_max\b", re.IGNORECASE),
-                            re.compile(r"\bprop_arbeitsbreite\b", re.IGNORECASE),
-                            re.compile(r"\bprop_einbaubreite_grundbohle\b", re.IGNORECASE),
-                            re.compile(r"\bprop_e1480_einbaubreite_max_m\b", re.IGNORECASE),
-                            re.compile(r"\bprop_e1470_einbaubreite_grundbohle_m\b", re.IGNORECASE),
-                            re.compile(r"\bprop_e1490_einbaubreite_mit_verbreiterungen_m\b", re.IGNORECASE),
-                            re.compile(r"\bprop_e1150_arbeitsbreite_mm\b", re.IGNORECASE),
-                        ],
-                    )
-                )
+            # NOTE: Property column selection (AC, weight, power, width) is now handled
+            # by the LLM using the ColumnCatalog. No hardcoded constraints needed.
 
             if manufacturer_matches:
                 for match in manufacturer_matches:
@@ -457,9 +435,8 @@ class SQLGuard:
             return False
         if _AVAIL_RE.search(normalized_query):
             return False
-        if _AC_RE.search(normalized_query) or _WEIGHT_RE.search(normalized_query):
-            return False
-        if _POWER_RE.search(normalized_query) or _WIDTH_RE.search(normalized_query):
+        # If query contains property-related terms, LLM will handle via ColumnCatalog
+        if _STRUCTURED_RE.search(normalized_query):
             return False
         if re.search(r"\b(seriennummer|inventarnummer|hersteller)\b", normalized_query):
             return False
