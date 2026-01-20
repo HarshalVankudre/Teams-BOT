@@ -16,14 +16,17 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, field
 
-from openai import AsyncOpenAI
-
 from .config import config
+from .providers import get_provider, ChatMessage
 from .schema import SQL_AGENT_SCHEMA
 from .postgres import PostgresService
 from .sql_guard import SQLGuard, SQLIntent
 from .answer_guard import AnswerGuard, AnswerContext
 from .property_resolver import create_property_resolver
+from .planning import QueryPlanner, QueryPlan
+from .sql_verifier import SQLVerifier
+from .reasoning_tools import reasoning_tools, REASONING_TOOL_DEFINITIONS
+from .context_manager import context_manager, ConversationContext
 
 
 @dataclass
@@ -37,6 +40,11 @@ class AgentResult:
     sql_results_count: int = 0
     sources: List[Dict[str, Any]] = field(default_factory=list)
     logs: List[Dict[str, Any]] = field(default_factory=list)
+    # Token usage
+    input_tokens: int = 0
+    output_tokens: int = 0
+    reasoning_tokens: int = 0
+    total_tokens: int = 0
 
 
 class SingleAgent:
@@ -187,6 +195,17 @@ Nutze stattdessen geraetegruppe_name fuer Kette/Rad-Unterscheidung bei Fertigern
         }
     ]
 
+    # Reasoning tools (added conditionally based on config)
+    @classmethod
+    def get_tools(cls) -> List[Dict[str, Any]]:
+        """Get tool definitions based on configuration."""
+        tools = list(cls.TOOLS)  # Copy base tools
+
+        if config.agent_enable_reasoning_tools:
+            tools.extend(REASONING_TOOL_DEFINITIONS)
+
+        return tools
+
     def __init__(
         self,
         model: Optional[str] = None,
@@ -201,9 +220,9 @@ Nutze stattdessen geraetegruppe_name fuer Kette/Rad-Unterscheidung bei Fertigern
             verbose: Enable detailed logging
             pinecone_service: Optional Pinecone service for document search
         """
-        self.model = model or config.get_chat_model()
         self.verbose = verbose
-        self.client = AsyncOpenAI(api_key=config.openai_api_key)
+        self.provider = get_provider()
+        self.model = self.provider.model
         self.postgres = PostgresService()
         self.pinecone = pinecone_service
         
@@ -224,6 +243,25 @@ Nutze stattdessen geraetegruppe_name fuer Kette/Rad-Unterscheidung bei Fertigern
             max_bullets=10,
             max_chars=2500,
         )
+
+        # Enhanced features (conditionally enabled)
+        self.planner = None
+        self.sql_verifier = None
+
+        if config.agent_enable_planning:
+            self.planner = QueryPlanner(
+                provider=self.provider if config.agent_planning_model == "" else None,
+                model=config.agent_planning_model
+            )
+            self._log("Planning enabled")
+
+        if config.agent_enable_sql_verification:
+            self.sql_verifier = SQLVerifier(
+                equipment_table=self.postgres.equipment_table,
+                column_resolver=self.postgres.get_column_info,
+                provider=self.provider if config.agent_verification_model == "" else None
+            )
+            self._log("SQL verification enabled")
 
         # Per-thread memory (helps follow-ups like "davon/diese/welche").
         # Keyed by thread_key to avoid cross-user leakage in shared agent instances.
@@ -555,6 +593,31 @@ Nutze stattdessen geraetegruppe_name fuer Kette/Rad-Unterscheidung bei Fertigern
             "timestamp": time.time()
         })
 
+        # Enhanced context management
+        ctx = context_manager.get_context(tk)
+        ctx = context_manager.update_context(tk, user_query)
+
+        # Planning phase (if enabled)
+        query_plan = None
+        if self.planner and config.agent_enable_planning:
+            try:
+                query_plan = await self.planner.create_plan(
+                    user_query,
+                    thread_state=thread_state,
+                    use_llm=ctx.is_followup or len(user_query) > 80
+                )
+                execution_logs.append({
+                    "event": "planning",
+                    "plan": {
+                        "complexity": query_plan.complexity,
+                        "steps": len(query_plan.steps),
+                        "is_followup": query_plan.is_followup
+                    },
+                    "timestamp": time.time()
+                })
+            except Exception as e:
+                self._log(f"Planning failed (non-critical): {e}")
+
         if intent.clarification and not intent.followup_ids:
             execution_time = int((time.time() - start_time) * 1000)
             execution_logs.append({
@@ -578,6 +641,16 @@ Nutze stattdessen geraetegruppe_name fuer Kette/Rad-Unterscheidung bei Fertigern
         if system_instructions:
             system_prompt = f"{system_instructions}\n\n---\n\n{self.SYSTEM_PROMPT}"
 
+        # Inject learned rules from user feedback at the start of system prompt
+        try:
+            from .learned_rules import learned_rules_service
+            rules_section = learned_rules_service.build_rules_prompt_section()
+            if rules_section:
+                system_prompt = rules_section + system_prompt
+                self._log(f"Injected {len(learned_rules_service.get_all_active_rules())} learned rules into prompt")
+        except Exception as e:
+            self._log(f"Failed to inject learned rules (non-critical): {e}")
+
         messages = [{"role": "system", "content": system_prompt}]
 
         # Inject per-thread memory early so it is always available to the model.
@@ -593,7 +666,17 @@ Nutze stattdessen geraetegruppe_name fuer Kette/Rad-Unterscheidung bei Fertigern
         )
         if policy_message:
             messages.append({"role": "system", "content": policy_message})
-        
+
+        # Inject enhanced context
+        if ctx and (ctx.is_followup or ctx.last_result_ids):
+            messages.append({"role": "system", "content": ctx.to_prompt_section()})
+
+        # Inject query plan
+        if query_plan and query_plan.steps:
+            plan_section = query_plan.to_prompt_section()
+            if plan_section:
+                messages.append({"role": "system", "content": plan_section})
+
         # Add conversation history if provided
         if conversation_history:
             max_messages = max(2, int(config.conversation_max_messages))
@@ -644,19 +727,28 @@ Nutze stattdessen geraetegruppe_name fuer Kette/Rad-Unterscheidung bei Fertigern
             max_tool_rounds = max(1, int(config.agent_max_tool_rounds))
             tool_rounds = 0
 
+            # Convert messages to ChatMessage format for provider
+            def to_chat_messages(msgs):
+                return [ChatMessage(
+                    role=m.get("role", "user"),
+                    content=m.get("content", ""),
+                    tool_call_id=m.get("tool_call_id"),
+                    tool_calls=m.get("tool_calls"),
+                ) for m in msgs]
+
             # Initial call with tools
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                tools=self.TOOLS,
+            chat_response = await self.provider.chat_completion(
+                messages=to_chat_messages(messages),
+                tools=self.get_tools(),
                 tool_choice="auto",
-                max_completion_tokens=max_completion_tokens
+                max_tokens=max_completion_tokens
             )
-            
-            message = response.choices[0].message
-            
+
+            # Track token usage
+            total_usage = chat_response.usage
+
             # Handle tool calls if present
-            while message.tool_calls:
+            while chat_response.tool_calls:
                 tool_rounds += 1
                 if tool_rounds > max_tool_rounds:
                     self._log("Tool round limit reached; forcing final response.")
@@ -664,52 +756,51 @@ Nutze stattdessen geraetegruppe_name fuer Kette/Rad-Unterscheidung bei Fertigern
                         "role": "system",
                         "content": "Stop calling tools and answer with the best available information."
                     })
-                    response = await self.client.chat.completions.create(
-                        model=self.model,
-                        messages=messages,
-                        tools=self.TOOLS,
+                    chat_response = await self.provider.chat_completion(
+                        messages=to_chat_messages(messages),
+                        tools=self.get_tools(),
                         tool_choice="none",
-                        max_completion_tokens=max_completion_tokens
+                        max_tokens=max_completion_tokens
                     )
-                    message = response.choices[0].message
+                    total_usage = total_usage + chat_response.usage
                     break
 
-                self._log(f"Tool calls: {len(message.tool_calls)}")
+                self._log(f"Tool calls: {len(chat_response.tool_calls)}")
                 
                 # Log tool calls
                 execution_logs.append({
                     "event": "tool_calls",
                     "tools": [{
-                        "name": tc.function.name,
-                        "arguments": tc.function.arguments
-                    } for tc in message.tool_calls],
+                        "name": tc.name,
+                        "arguments": json.dumps(tc.arguments)
+                    } for tc in chat_response.tool_calls],
                     "timestamp": time.time()
                 })
-                
+
                 # Add assistant message with tool calls
                 messages.append({
                     "role": "assistant",
-                    "content": message.content,
+                    "content": chat_response.content,
                     "tool_calls": [
                         {
                             "id": tc.id,
                             "type": "function",
                             "function": {
-                                "name": tc.function.name,
-                                "arguments": tc.function.arguments
+                                "name": tc.name,
+                                "arguments": json.dumps(tc.arguments)
                             }
                         }
-                        for tc in message.tool_calls
+                        for tc in chat_response.tool_calls
                     ]
                 })
-                
+
                 # Execute each tool call
-                for tool_call in message.tool_calls:
-                    tool_name = tool_call.function.name
+                for tool_call in chat_response.tool_calls:
+                    tool_name = tool_call.name
                     tools_used.append(tool_name)
-                    
+
                     try:
-                        args = json.loads(tool_call.function.arguments)
+                        args = tool_call.arguments
                         result = await self._execute_tool(
                             tool_name,
                             args,
@@ -777,17 +868,16 @@ Nutze stattdessen geraetegruppe_name fuer Kette/Rad-Unterscheidung bei Fertigern
                         })
                 
                 # Get next response
-                response = await self.client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    tools=self.TOOLS,
+                chat_response = await self.provider.chat_completion(
+                    messages=to_chat_messages(messages),
+                    tools=self.get_tools(),
                     tool_choice="auto",
-                    max_completion_tokens=max_completion_tokens
+                    max_tokens=max_completion_tokens
                 )
-                message = response.choices[0].message
-            
+                total_usage = total_usage + chat_response.usage
+
             # Final response
-            final_response = message.content or "Keine Antwort verfügbar."
+            final_response = chat_response.content or "Keine Antwort verfügbar."
             sources = self._dedupe_sources(sources)
             tools_used = list(dict.fromkeys(tools_used))
             if self.answer_guard:
@@ -819,6 +909,18 @@ Nutze stattdessen geraetegruppe_name fuer Kette/Rad-Unterscheidung bei Fertigern
                 "timestamp": time.time()
             })
 
+            # Update context manager with results
+            context_manager.update_context(
+                tk,
+                user_query,
+                response=final_response,
+                sql=thread_state.get("last_sql", ""),
+                sql_purpose=thread_state.get("last_sql_purpose", ""),
+                result_ids=thread_state.get("last_result_ids"),
+                results_sample=thread_state.get("last_sql_results_sample"),
+                result_count=sql_results_count
+            )
+
             return AgentResult(
                 response=final_response,
                 success=True,
@@ -826,7 +928,11 @@ Nutze stattdessen geraetegruppe_name fuer Kette/Rad-Unterscheidung bei Fertigern
                 tools_used=tools_used,
                 sql_results_count=sql_results_count,
                 sources=sources,
-                logs=execution_logs
+                logs=execution_logs,
+                input_tokens=total_usage.input_tokens,
+                output_tokens=total_usage.output_tokens,
+                reasoning_tokens=total_usage.reasoning_tokens,
+                total_tokens=total_usage.total_tokens,
             )
             
         except Exception as e:
@@ -860,6 +966,12 @@ Nutze stattdessen geraetegruppe_name fuer Kette/Rad-Unterscheidung bei Fertigern
             return await self._execute_sql(args, intent=intent, thread_key=thread_key)
         elif tool_name == "search_documents":
             return await self._search_documents(args)
+        elif tool_name == "calculate":
+            return self._execute_calculate(args)
+        elif tool_name == "compare":
+            return self._execute_compare(args)
+        elif tool_name == "aggregate":
+            return self._execute_aggregate(args)
         else:
             return {"error": f"Unknown tool: {tool_name}"}
 
@@ -1021,6 +1133,21 @@ Nutze stattdessen geraetegruppe_name fuer Kette/Rad-Unterscheidung bei Fertigern
                     "limit_value": validation.limit_value,
                 }
 
+        # SQL verification (if enabled)
+        if self.sql_verifier and config.agent_enable_sql_verification:
+            verification = self.sql_verifier.verify(sql, purpose, intent.query if intent else "")
+            if not verification.is_valid:
+                return {
+                    "purpose": purpose,
+                    "sql": sql,
+                    "error": "SQL verification failed",
+                    "issues": verification.issues,
+                    "suggestions": verification.suggestions,
+                }
+            if verification.corrected_sql and verification.should_retry:
+                sql = verification.corrected_sql
+                self._log(f"SQL auto-corrected: {verification.issues}")
+
         prepared_sql, error = self.postgres.prepare_readonly_sql(sql, default_limit=10000)
         if error:
             return {
@@ -1077,6 +1204,63 @@ Nutze stattdessen geraetegruppe_name fuer Kette/Rad-Unterscheidung bei Fertigern
             }
         except Exception as e:
             return {"error": str(e)}
+
+    def _execute_calculate(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute calculate tool."""
+        result = reasoning_tools.calculate(
+            expression=args.get("expression", ""),
+            values=args.get("values"),
+            unit=args.get("unit"),
+            purpose=args.get("purpose", "")
+        )
+        return {
+            "purpose": args.get("purpose", ""),
+            "expression": result.expression,
+            "result": result.result,
+            "unit": result.unit,
+            "breakdown": result.breakdown,
+            "success": result.success,
+            "error": result.error
+        }
+
+    def _execute_compare(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute compare tool."""
+        result = reasoning_tools.compare(
+            items=args.get("items", []),
+            criteria=args.get("criteria", []),
+            weights=args.get("weights"),
+            requirements=args.get("requirements"),
+            purpose=args.get("purpose", "")
+        )
+        return {
+            "purpose": args.get("purpose", ""),
+            "items_compared": len(result.items),
+            "criteria": result.criteria,
+            "ranking": result.ranking[:5],  # Top 5
+            "winner": result.winner,
+            "summary": result.summary,
+            "success": result.success,
+            "error": result.error
+        }
+
+    def _execute_aggregate(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute aggregate tool."""
+        result = reasoning_tools.aggregate(
+            data=args.get("data", []),
+            operation=args.get("operation", "count"),
+            field=args.get("field", ""),
+            group_by=args.get("group_by"),
+            purpose=args.get("purpose", "")
+        )
+        return {
+            "purpose": args.get("purpose", ""),
+            "operation": result.operation,
+            "field": result.field,
+            "result": result.result,
+            "groups": result.groups,
+            "success": result.success,
+            "error": result.error
+        }
 
 
 def create_single_agent(verbose: bool = False, pinecone_service=None) -> SingleAgent:
