@@ -55,7 +55,8 @@ core_columns:
       Equipment category. KRITISCH für Kette/Mobil/Rad-Unterscheidung!
       Enthält Werte wie: Kettenbagger, Mobilbagger, Kettenfertiger, Radfertiger, Minibagger, etc.
       IMMER diese Spalte für Kette vs. Mobil Fragen verwenden!
-    synonyms: [kategorie, category, typ, type, gerätegruppe, maschinentyp, kette, mobil, rad, kettenbagger, mobilbagger, radfertiger, kettenfertiger]
+      Für Straßenbau: Kettenfertiger, Radfertiger, Walzen.
+    synonyms: [kategorie, category, typ, type, gerätegruppe, maschinentyp, kette, mobil, rad, kettenbagger, mobilbagger, radfertiger, kettenfertiger, fertiger, strasse, strassenbau, asphalt, walze, road]
     data_type: CATEGORICAL
     null_ratio: 0.0
 
@@ -284,7 +285,8 @@ columns:
     description: |
       Arbeitsbreite der Maschine in Millimetern.
       Z.B. bei Walzen, Fräsen, Fertigern.
-    synonyms: [arbeitsbreite, working width, walzenbreite]
+      Relevant für Straßenbau und Asphaltarbeiten.
+    synonyms: [arbeitsbreite, working width, walzenbreite, strasse, strassenbau, road, asphalt, asphaltieren, weg, meter breit, m breit]
     data_type: NUMERIC_TEXT
     unit: mm
     null_ratio: 0.9705
@@ -293,8 +295,10 @@ columns:
   - column: prop_e1470_einbaubreite_grundbohle_m
     code: E1470
     business_name: Einbaubreite Grundbohle
-    description: Einbaubreite der Grundbohle bei Fertigern in Metern
-    synonyms: [einbaubreite, paving width, bohlenbreite]
+    description: |
+      Einbaubreite der Grundbohle bei Fertigern in Metern.
+      Für Straßenbau - wie breit kann asphaltiert werden.
+    synonyms: [einbaubreite, paving width, bohlenbreite, strasse, strassenbau, road, asphalt, fertiger, bauen, meter breit]
     data_type: NUMERIC_TEXT
     unit: m
     null_ratio: 0.975
@@ -302,8 +306,10 @@ columns:
   - column: prop_e1480_einbaubreite_max_m
     code: E1480
     business_name: Einbaubreite max
-    description: Maximale Einbaubreite bei Fertigern in Metern
-    synonyms: [einbaubreite max, maximum paving width]
+    description: |
+      Maximale Einbaubreite bei Fertigern in Metern.
+      Maximale Straßenbreite die asphaltiert werden kann.
+    synonyms: [einbaubreite max, maximum paving width, strasse, strassenbau, road, asphalt, fertiger, bauen, max breite]
     data_type: NUMERIC_TEXT
     unit: m
     null_ratio: 0.978
