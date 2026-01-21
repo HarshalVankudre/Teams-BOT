@@ -1,0 +1,525 @@
+version: "1.0.0"
+table: equipment_matrix
+
+# Cast recipes for NUMERIC_TEXT columns (values stored as text like "3410 mm")
+cast_recipes:
+  mm: "CAST(NULLIF(regexp_replace({col}, '[^0-9]', '', 'g'), '') AS NUMERIC)"
+  m: "CAST(NULLIF(REPLACE(regexp_replace({col}, '[^0-9,.]', '', 'g'), ',', '.'), '') AS NUMERIC)"
+  kg: "CAST(NULLIF(regexp_replace({col}, '[^0-9]', '', 'g'), '') AS NUMERIC)"
+  kW: "CAST(NULLIF(regexp_replace({col}, '[^0-9]', '', 'g'), '') AS NUMERIC)"
+  t: "CAST(NULLIF(REPLACE(regexp_replace({col}, '[^0-9,.]', '', 'g'), ',', '.'), '') AS NUMERIC)"
+  m3: "CAST(NULLIF(REPLACE(regexp_replace({col}, '[^0-9,.]', '', 'g'), ',', '.'), '') AS NUMERIC)"
+  bar: "CAST(NULLIF(regexp_replace({col}, '[^0-9]', '', 'g'), '') AS NUMERIC)"
+
+# Core columns (always include in reduced schema)
+core_columns:
+  - column: id
+    business_name: ID
+    description: Unique identifier for each equipment record
+    data_type: BIGINT
+    null_ratio: 0.0
+
+  - column: bezeichnung
+    business_name: Bezeichnung / Model
+    description: Equipment model name and designation
+    synonyms: [name, modell, model, maschine, bezeichnung, typ]
+    data_type: TEXT
+    null_ratio: 0.0
+
+  - column: seriennummer
+    business_name: Seriennummer
+    description: Serial number of the equipment
+    synonyms: [serial, seriennummer, sn, serial number]
+    data_type: TEXT
+    null_ratio: 0.0
+
+  - column: inventarnummer
+    business_name: Inventarnummer
+    description: Internal inventory number
+    synonyms: [inventar, inventory, inv]
+    data_type: TEXT
+    null_ratio: 0.0
+
+  - column: hersteller_name
+    business_name: Hersteller
+    description: |
+      Manufacturer name. Common values: Caterpillar, Liebherr, BOMAG, Wirtgen, Hamm, Wacker Neuson, etc.
+      WICHTIG: Werte sind case-sensitive (z.B. "BOMAG" nicht "Bomag")
+    synonyms: [hersteller, manufacturer, marke, brand, firma]
+    data_type: CATEGORICAL
+    null_ratio: 0.0
+
+  - column: geraetegruppe_name
+    business_name: Gerätegruppe / Equipment Type
+    description: |
+      Equipment category. KRITISCH für Kette/Mobil/Rad-Unterscheidung!
+      Enthält Werte wie: Kettenbagger, Mobilbagger, Kettenfertiger, Radfertiger, Minibagger, etc.
+      IMMER diese Spalte für Kette vs. Mobil Fragen verwenden!
+    synonyms: [kategorie, category, typ, type, gerätegruppe, maschinentyp, kette, mobil, rad, kettenbagger, mobilbagger, radfertiger, kettenfertiger]
+    data_type: CATEGORICAL
+    null_ratio: 0.0
+
+  - column: verwendung_code
+    business_name: Verwendung
+    description: |
+      Usage type: MIET (rental/Vermietung) or VK (sale/Verkauf)
+    synonyms: [verwendung, miete, verkauf, rental, sale]
+    data_type: CATEGORICAL
+    null_ratio: 0.0
+
+  - column: nuclos_state
+    business_name: Verfügbarkeit
+    description: |
+      Availability status: Released (available) or Locked (not available)
+    synonyms: [status, verfügbar, available, released, locked]
+    data_type: CATEGORICAL
+    null_ratio: 0.0
+
+# Property columns (enriched top 30, then auto-generated rest)
+columns:
+  # === TOP 30 MOST POPULATED (enriched) ===
+
+  - column: prop_e1330_breite_mm
+    code: E1330
+    business_name: Breite
+    description: |
+      Breite/Transportbreite der Maschine in Millimetern.
+      Relevant für Durchfahrtsbreiten, Transport, Zugang zu engen Bereichen.
+    synonyms: [breite, width, transportbreite, durchfahrtsbreite, breit]
+    data_type: NUMERIC_TEXT
+    unit: mm
+    null_ratio: 0.7151
+    examples: ["2500 mm", "3000 mm", "2990 mm"]
+
+  - column: prop_e1730_gewicht_kg
+    code: E1730
+    business_name: Gewicht
+    description: |
+      Betriebsgewicht der Maschine in Kilogramm.
+      Wichtig für Transportplanung, Tragfähigkeit, Bodendruck.
+    synonyms: [gewicht, weight, masse, schwer, tonnage, kg]
+    data_type: NUMERIC_TEXT
+    unit: kg
+    null_ratio: 0.8203
+    examples: ["15420 kg", "7500 kg", "3650 kg"]
+
+  - column: prop_e1990_laenge_mm
+    code: E1990
+    business_name: Länge
+    description: |
+      Gesamtlänge der Maschine in Millimetern.
+      Relevant für Transport und Platzbedarf.
+    synonyms: [länge, laenge, length, lang]
+    data_type: NUMERIC_TEXT
+    unit: mm
+    null_ratio: 0.8324
+    examples: ["6500 mm", "8200 mm", "4500 mm"]
+
+  - column: prop_e1860_hoehe_mm
+    code: E1860
+    business_name: Höhe
+    description: |
+      Gesamthöhe der Maschine in Millimetern.
+      Wichtig für Durchfahrtshöhen, Transport.
+    synonyms: [höhe, hoehe, height, hoch]
+    data_type: NUMERIC_TEXT
+    unit: mm
+    null_ratio: 0.8328
+    examples: ["3100 mm", "2850 mm", "2500 mm"]
+
+  - column: prop_e2180_motor_leistung_kw
+    code: E2180
+    business_name: Motorleistung
+    description: |
+      Motorleistung in Kilowatt.
+      Indikator für Leistungsfähigkeit der Maschine.
+    synonyms: [leistung, power, motor, kw, kilowatt, ps, motorleistung]
+    data_type: NUMERIC_TEXT
+    unit: kW
+    null_ratio: 0.8931
+    examples: ["75 kW", "129 kW", "55 kW"]
+
+  - column: prop_e2190_motor_typ
+    code: E2190
+    business_name: Motor Typ
+    description: Motortyp/Motorbezeichnung
+    synonyms: [motor, motortyp, engine]
+    data_type: TEXT
+    null_ratio: 0.8935
+
+  - column: prop_e2440_schnellwechsler_typ
+    code: E2440
+    business_name: Schnellwechsler Typ
+    description: Typ des Schnellwechslers für Anbaugeräte
+    synonyms: [schnellwechsler, quick coupler, wechsler]
+    data_type: TEXT
+    null_ratio: 0.8943
+
+  - column: prop_e2170_motor_hersteller
+    code: E2170
+    business_name: Motor Hersteller
+    description: Hersteller des Motors
+    synonyms: [motorhersteller, engine manufacturer]
+    data_type: TEXT
+    null_ratio: 0.8956
+
+  - column: prop_e2970_bohle_typ
+    code: E2970
+    business_name: Bohle Typ
+    description: Typ der Einbaubohle (für Fertiger)
+    synonyms: [bohle, screed, einbaubohle]
+    data_type: TEXT
+    null_ratio: 0.8993
+
+  - column: prop_e1880_inhalt_m3
+    code: E1880
+    business_name: Inhalt / Volumen
+    description: |
+      Fassungsvermögen/Volumen in Kubikmetern.
+      Z.B. Schaufelvolumen, Muldenvolumen.
+    synonyms: [inhalt, volumen, volume, kapazität, fassungsvermögen, m3, kubikmeter]
+    data_type: NUMERIC_TEXT
+    unit: m3
+    null_ratio: 0.9189
+    examples: ["0.8 m³", "1.2 m³", "15 m³"]
+
+  - column: prop_e1270_bio_hydraulikoel
+    code: E1270
+    business_name: Bio-Hydrauliköl
+    description: Ob die Maschine mit Bio-Hydrauliköl betrieben wird
+    synonyms: [bio, hydrauliköl, umwelt, eco]
+    data_type: BOOLEAN
+    null_ratio: 0.9193
+
+  - column: prop_e3020_empf_baggerklasse_t
+    code: E3020
+    business_name: Empfohlene Baggerklasse
+    description: Empfohlene Baggerklasse für Anbaugeräte in Tonnen
+    synonyms: [baggerklasse, excavator class, trägergerät]
+    data_type: NUMERIC_TEXT
+    unit: t
+    null_ratio: 0.9222
+    examples: ["8-15 t", "20-30 t", "3-6 t"]
+
+  - column: prop_e2490_schnittbreite_mm
+    code: E2490
+    business_name: Schnittbreite
+    description: Schnittbreite bei Fräsen/Schneidgeräten in mm
+    synonyms: [schnittbreite, cutting width, fräsbreite]
+    data_type: NUMERIC_TEXT
+    unit: mm
+    null_ratio: 0.9226
+
+  - column: prop_e1070_abgasstufe_eu
+    code: E1070
+    business_name: Abgasstufe EU
+    description: EU-Abgasnorm (Stage IIIA, Stage IV, Stage V, etc.)
+    synonyms: [abgasstufe, emission, abgas, tier, stage]
+    data_type: CATEGORICAL
+    null_ratio: 0.9297
+
+  - column: prop_e1380_dieselpartikelfilter
+    code: E1380
+    business_name: Dieselpartikelfilter
+    description: Ob Dieselpartikelfilter vorhanden
+    synonyms: [dpf, partikelfilter, filter]
+    data_type: BOOLEAN
+    null_ratio: 0.9309
+
+  - column: prop_e2950_zentralschmierung
+    code: E2950
+    business_name: Zentralschmierung
+    description: Ob Zentralschmieranlage vorhanden
+    synonyms: [zentralschmierung, automatic lubrication]
+    data_type: BOOLEAN
+    null_ratio: 0.9339
+
+  - column: prop_e2480_schnellwechsler_oilquick
+    code: E2480
+    business_name: Schnellwechsler OilQuick
+    description: OilQuick Schnellwechsler System
+    synonyms: [oilquick, schnellwechsler]
+    data_type: BOOLEAN
+    null_ratio: 0.9409
+
+  - column: prop_e1080_abgasstufe_usa
+    code: E1080
+    business_name: Abgasstufe USA
+    description: US-Abgasnorm (Tier 3, Tier 4, etc.)
+    synonyms: [tier, epa, usa abgas]
+    data_type: CATEGORICAL
+    null_ratio: 0.9451
+
+  - column: prop_e1130_anzahl_zaehne
+    code: E1130
+    business_name: Anzahl Zähne
+    description: Anzahl der Zähne (bei Löffeln, Greifern)
+    synonyms: [zähne, teeth, zaehne]
+    data_type: NUMERIC_TEXT
+    null_ratio: 0.9505
+
+  - column: prop_e1930_klimaanlage
+    code: E1930
+    business_name: Klimaanlage
+    description: Ob Klimaanlage in der Kabine vorhanden
+    synonyms: [klima, klimaanlage, ac, air conditioning, klimatisiert]
+    data_type: BOOLEAN
+    null_ratio: 0.9539
+
+  - column: prop_e1740_grabtiefe_mm
+    code: E1740
+    business_name: Grabtiefe
+    description: |
+      Maximale Grabtiefe des Baggers in Millimetern.
+      Wichtig für Aushub, Kanalarbeiten, Fundamentbau.
+    synonyms: [grabtiefe, digging depth, tiefe, aushubtiefe, graben]
+    data_type: NUMERIC_TEXT
+    unit: mm
+    null_ratio: 0.96
+    examples: ["3410 mm", "5720 mm", "7000 mm"]
+
+  - column: prop_e1150_arbeitsbreite_mm
+    code: E1150
+    business_name: Arbeitsbreite
+    description: |
+      Arbeitsbreite der Maschine in Millimetern.
+      Z.B. bei Walzen, Fräsen, Fertigern.
+    synonyms: [arbeitsbreite, working width, walzenbreite]
+    data_type: NUMERIC_TEXT
+    unit: mm
+    null_ratio: 0.9705
+    examples: ["2000 mm", "1500 mm", "2200 mm"]
+
+  - column: prop_e1470_einbaubreite_grundbohle_m
+    code: E1470
+    business_name: Einbaubreite Grundbohle
+    description: Einbaubreite der Grundbohle bei Fertigern in Metern
+    synonyms: [einbaubreite, paving width, bohlenbreite]
+    data_type: NUMERIC_TEXT
+    unit: m
+    null_ratio: 0.975
+
+  - column: prop_e1480_einbaubreite_max_m
+    code: E1480
+    business_name: Einbaubreite max
+    description: Maximale Einbaubreite bei Fertigern in Metern
+    synonyms: [einbaubreite max, maximum paving width]
+    data_type: NUMERIC_TEXT
+    unit: m
+    null_ratio: 0.978
+
+  - column: prop_e2370_reversierbar
+    code: E2370
+    business_name: Reversierbar
+    description: Ob die Maschine reversierbar ist (Vor-/Rücklauf)
+    synonyms: [reversierbar, reversible]
+    data_type: BOOLEAN
+    null_ratio: 0.98
+
+  - column: prop_e2700_tragkraft_an_der_spitze_kg
+    code: E2700
+    business_name: Tragkraft an der Spitze
+    description: Tragkraft an der Auslegerspitze in kg
+    synonyms: [tragkraft, lifting capacity, hubkraft]
+    data_type: NUMERIC_TEXT
+    unit: kg
+    null_ratio: 0.985
+
+  - column: prop_e2710_tragkraft_max_kg
+    code: E2710
+    business_name: Tragkraft max
+    description: Maximale Tragkraft in kg
+    synonyms: [tragkraft max, max lifting capacity]
+    data_type: NUMERIC_TEXT
+    unit: kg
+    null_ratio: 0.985
+
+  - column: prop_e2390_schaufelvolumen_m3
+    code: E2390
+    business_name: Schaufelvolumen
+    description: Volumen der Schaufel/Löffel in Kubikmetern
+    synonyms: [schaufelvolumen, bucket volume, löffelvolumen]
+    data_type: NUMERIC_TEXT
+    unit: m3
+    null_ratio: 0.988
+
+  - column: prop_e2250_nutzlast_kg
+    code: E2250
+    business_name: Nutzlast
+    description: Maximale Nutzlast in kg
+    synonyms: [nutzlast, payload, zuladung]
+    data_type: NUMERIC_TEXT
+    unit: kg
+    null_ratio: 0.988
+
+  # === DEPRECATED/EMPTY COLUMNS (do not use) ===
+
+  - column: prop_e2100_mobil_kette
+    code: E2100
+    business_name: Mobil - Kette (DEPRECATED)
+    description: |
+      WARNUNG: Diese Spalte ist zu 99.9% NULL!
+      Für Kette/Mobil-Unterscheidung IMMER geraetegruppe_name verwenden!
+    data_type: BOOLEAN
+    null_ratio: 0.999
+    deprecated: true
+    alternative: geraetegruppe_name
+
+  - column: prop_e2110_mobil_rad
+    code: E2110
+    business_name: Mobil - Rad (DEPRECATED)
+    description: |
+      WARNUNG: Diese Spalte ist zu 99.9% NULL!
+      Für Kette/Mobil/Rad-Unterscheidung IMMER geraetegruppe_name verwenden!
+    data_type: BOOLEAN
+    null_ratio: 0.999
+    deprecated: true
+    alternative: geraetegruppe_name
+
+  - column: prop_e2120_mobil_semi
+    code: E2120
+    business_name: Mobil - Semi (DEPRECATED)
+    description: |
+      WARNUNG: Diese Spalte ist zu 99.9% NULL!
+      Für Mobilitätstyp IMMER geraetegruppe_name verwenden!
+    data_type: BOOLEAN
+    null_ratio: 0.999
+    deprecated: true
+    alternative: geraetegruppe_name
+
+  # === REMAINING COLUMNS (auto-generated, sorted by null_ratio) ===
+
+  - column: prop_e1010_1_achser
+    code: E1010
+    business_name: 1-Achser
+    data_type: BOOLEAN
+    null_ratio: 0.997
+    deprecated: true
+
+  - column: prop_e1020_2_achser
+    code: E1020
+    business_name: 2-Achser
+    data_type: BOOLEAN
+    null_ratio: 0.997
+    deprecated: true
+
+  - column: prop_e1030_3_achser
+    code: E1030
+    business_name: 3-Achser
+    data_type: BOOLEAN
+    null_ratio: 0.997
+    deprecated: true
+
+  - column: prop_e1040_4_achser
+    code: E1040
+    business_name: 4-Achser
+    data_type: BOOLEAN
+    null_ratio: 0.997
+    deprecated: true
+
+  - column: prop_e1110_allradantrieb
+    code: E1110
+    business_name: Allradantrieb
+    description: Ob die Maschine Allradantrieb hat
+    synonyms: [allrad, 4x4, awd, allradantrieb]
+    data_type: BOOLEAN
+    null_ratio: 0.997
+
+  - column: prop_e1120_allradlenkung
+    code: E1120
+    business_name: Allradlenkung
+    description: Ob die Maschine Allradlenkung hat
+    synonyms: [allradlenkung, 4ws, all wheel steering]
+    data_type: BOOLEAN
+    null_ratio: 0.99
+
+  - column: prop_e1610_fraesbreite_mm
+    code: E1610
+    business_name: Fräsbreite
+    description: Fräsbreite bei Kaltfräsen in mm
+    synonyms: [fräsbreite, milling width]
+    data_type: NUMERIC_TEXT
+    unit: mm
+    null_ratio: 0.985
+
+  - column: prop_e1630_fraestiefe_mm
+    code: E1630
+    business_name: Frästiefe
+    description: Maximale Frästiefe in mm
+    synonyms: [frästiefe, milling depth]
+    data_type: NUMERIC_TEXT
+    unit: mm
+    null_ratio: 0.99
+
+  - column: prop_e1670_funkfernsteuerung
+    code: E1670
+    business_name: Funkfernsteuerung
+    description: Ob Funkfernsteuerung vorhanden
+    synonyms: [funk, fernsteuerung, remote control]
+    data_type: BOOLEAN
+    null_ratio: 0.99
+
+  - column: prop_e1760_greiferhydraulik
+    code: E1760
+    business_name: Greiferhydraulik
+    description: Ob Greiferhydraulik vorhanden
+    synonyms: [greiferhydraulik, grapple hydraulics]
+    data_type: BOOLEAN
+    null_ratio: 0.99
+
+  - column: prop_e1780_hammerhydraulik
+    code: E1780
+    business_name: Hammerhydraulik
+    description: Ob Hammerhydraulik vorhanden
+    synonyms: [hammerhydraulik, hammer hydraulics, meißel]
+    data_type: BOOLEAN
+    null_ratio: 0.99
+
+  - column: prop_e1890_kabine
+    code: E1890
+    business_name: Kabine
+    description: Kabinenausstattung
+    synonyms: [kabine, cabin, cab]
+    data_type: TEXT
+    null_ratio: 0.99
+
+  - column: prop_e2040_loeffelstiel_mm
+    code: E2040
+    business_name: Löffelstiel
+    description: Länge des Löffelstiels in mm
+    synonyms: [löffelstiel, stick, arm]
+    data_type: NUMERIC_TEXT
+    unit: mm
+    null_ratio: 0.99
+
+  - column: prop_e2130_monoausleger
+    code: E2130
+    business_name: Monoausleger
+    description: Ob Monoausleger vorhanden
+    synonyms: [monoausleger, mono boom]
+    data_type: BOOLEAN
+    null_ratio: 0.99
+
+  - column: prop_e2640_teleskopausleger
+    code: E2640
+    business_name: Teleskopausleger
+    description: Ob Teleskopausleger vorhanden
+    synonyms: [teleskopausleger, telescopic boom]
+    data_type: BOOLEAN
+    null_ratio: 0.99
+
+  - column: prop_e2670_tiltrotator
+    code: E2670
+    business_name: Tiltrotator
+    description: Ob Tiltrotator vorhanden/vorbereitet
+    synonyms: [tiltrotator, rototilt]
+    data_type: BOOLEAN
+    null_ratio: 0.99
+
+  - column: prop_e2810_verstellausleger
+    code: E2810
+    business_name: Verstellausleger
+    description: Ob Verstellausleger vorhanden
+    synonyms: [verstellausleger, adjustable boom]
+    data_type: BOOLEAN
+    null_ratio: 0.99

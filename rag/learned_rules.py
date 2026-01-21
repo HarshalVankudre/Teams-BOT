@@ -249,10 +249,23 @@ class LearnedRulesService:
         if not rules:
             return ""
 
-        rules_text = "\n".join([f"- {r['rule_text']}" for r in rules])
+        rules_text = "\n".join([f"  {i+1}. {r['rule_text']}" for i, r in enumerate(rules)])
 
-        return f"""GELERNTE REGELN (aus Nutzerfeedback - IMMER befolgen):
+        return f"""
+================================================================================
+NUTZERPRAEFERENZEN (aus Feedback gelernt) - {len(rules)} aktive Regeln
+================================================================================
+
+PRAEFERENZEN:
 {rules_text}
+
+ANWENDUNGSLOGIK:
+- Diese Praeferenzen sind STANDARDWERTE fuer allgemeine Anfragen
+- EXPLIZITE Nutzerwuensche haben IMMER Vorrang vor diesen Praeferenzen
+- Wende Praeferenzen nur an wenn sie zur Frage passen und kein Konflikt besteht
+- Bei Unsicherheit: Folge der direkten Nutzeranfrage, nicht der Praeferenz
+
+================================================================================
 
 """
 

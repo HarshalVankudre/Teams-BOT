@@ -75,7 +75,9 @@ _STRUCTURED_RE = re.compile(
     r"grabtiefe|reichweite|tragkraft|hubhoehe|hubhöhe|"
     r"arbeitsbreite|einbaubreite|motorleistung|gewicht|"
     r"fahrgeschwindigkeit|nutzlast|breite|tiefe|hoehe|höhe|"
-    r"leistung|schwer|meter|mm|kg|kw)\b"
+    r"leistung|schwer|meter|mm|kg|kw)\b|"
+    # Compound words with measurement suffixes (durchfahrtsbreite, transportbreite, etc.)
+    r"\w+breite\b|\w+tiefe\b|\w+hoehe\b|\w+höhe\b|\w+gewicht\b"
 )
 _RENTAL_RE = re.compile(r"\b(miet|vermiet|rental|rent)")
 _SALES_RE = re.compile(r"\b(verkauf|vk|sale|buy|kauf)")

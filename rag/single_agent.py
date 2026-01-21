@@ -27,6 +27,7 @@ from .planning import QueryPlanner, QueryPlan
 from .sql_verifier import SQLVerifier
 from .reasoning_tools import reasoning_tools, REASONING_TOOL_DEFINITIONS
 from .context_manager import context_manager, ConversationContext
+from .schema_linker import schema_linker, ReducedSchema
 
 
 @dataclass
@@ -68,40 +69,159 @@ class SingleAgent:
 TOOLS:
 - execute_sql: Datenbankabfragen
 - search_documents: Dokumentensuche (Handbücher, Anleitungen)
+- explore_column: Spalten erkunden - nutze dies BEVOR du unsichere Spalten abfragst
+
+TOOL-NUTZUNG (KRITISCH - IMMER BEFOLGEN):
+Du MUSST execute_sql aufrufen bei JEDER Frage zu:
+- Maschinen, Geräten, Equipment
+- Bauaufgaben (Straße bauen, graben, heben, etc.)
+- Empfehlungen ("was brauche ich", "was empfiehlst du")
+- Verfügbarkeit, Anzahl, Listen
+
+NIEMALS "keine Informationen gefunden" sagen OHNE vorher execute_sql aufgerufen zu haben!
+Wenn der Nutzer eine Aufgabe beschreibt → überlege welche Maschinenart passt → SUCHE in der DB.
+
+DETAILGRAD (WICHTIG):
+- Bei "was brauche ich / was empfehlst du / Straße bauen / Aufgabe X": antworte STANDARDMÄSSIG detailliert.
+- Detailliert bedeutet: kurze Struktur mit 4 Blöcken (siehe unten), aber keine Romane.
+- Wenn es >0 Treffer gibt: zeige IMMER 5 Beispiele ohne nachzufragen.
+- Nur nachfragen, wenn zentrale Parameter fehlen (z.B. Schichtdicke).
+
+STANDARD-FORMAT für Empfehlungen / Bauaufgaben:
+A) Ergebnis in 1 Satz (was ist die passende Maschinenkette)
+B) Pflichtgeräte (max 5 Bulletpoints): je Gerät + warum (mit konkreter Zahl aus SQL, z.B. "Einbaubreite 3,20m")
+C) Passende Mietmaschinen aus DB (EXAKT aus SQL-Results!):
+   - Anzahl passende Maschinen (COUNT aus SQL)
+   - Top 5 Beispiele - EXAKT kopieren aus SQL-Result:
+     SN [seriennummer] | [bezeichnung] | [hersteller_name] | Breite: [prop_e1480_einbaubreite_max_m]
+   - NIEMALS Seriennummern oder Modelle erfinden! Nur exakte Werte aus results verwenden.
+D) 1 Rückfrage, nur wenn nötig (z.B. Asphalt vs. Schotter, Schichtdicke, Länge)
 
 DATENPRIORITÄT (WICHTIG):
 - Interne Daten (SQL + interne Dokumente) haben immer Vorrang.
 - Wenn interne Quellen vorhanden sind, nutze sie. Nenne Quellen nur, wenn der Nutzer explizit danach fragt (z.B. "Quelle", "Quellen", "Beleg", "Source").
 - Wenn interne Daten fehlen: sag das explizit und stelle gezielte Rückfragen.  
-DATENGRUNDLAGE (VERBINDLICH):
-- Antworte ausschliesslich mit Daten aus execute_sql oder search_documents.
-- Nutze keine allgemeinen Kenntnisse, Annahmen oder externes Wissen.
-- Wenn keine internen Daten vorhanden sind: sag das klar und frage gezielt nach.
+DATENGRUNDLAGE (VERBINDLICH - KRITISCH!):
+- VERSTEHEN: Nutze dein Fachwissen um zu verstehen was der Nutzer braucht.
+- ANTWORTEN: Basiere Antworten und Empfehlungen NUR auf Daten aus execute_sql oder search_documents.
+- Wenn keine passenden Daten gefunden: sag das klar und frage gezielt nach.
 
+KEINE ERFINDUNGEN (ABSOLUT KRITISCH!):
+- NIEMALS Seriennummern, Modellnamen oder Werte erfinden!
+- Wenn du Beispiele (Seriennummer/Modell) auflistest: NUR exakte Werte aus den SQL-Resultaten verwenden.
+- Wenn ein Feld fehlt oder NULL ist: schreibe "k.A." (keine Angabe) statt zu raten.
+- Erfinde KEINE plausibel klingenden Seriennummern oder Modellnamen!
+- Jede Seriennummer und jeder Modellname MUSS exakt aus dem SQL-Result stammen.
+
+Top-5 Beispiele MÜSSEN exakt aus SQL übernommen werden:
+Format: Seriennummer | Bezeichnung | Hersteller | relevante Werte
+
+Bei "warum": nenne 2-3 Gründe mit konkreten SQL-Zahlen (Breite, kW, kg).
+Keine allgemeinen Aussagen ohne Zahl aus der DB.
+Wenn du "ca." schreiben willst: zeige stattdessen min–max aus SQL (z.B. "6500–6600 kg" statt "ca. 6500 kg").
+
+VERSTEHEN UND DENKEN (KRITISCH - DU BIST EIN EXPERTE):
+Du bist ein Baumaschinen-Experte. Nutze dein Fachwissen um Anfragen zu VERSTEHEN:
+
+1. INTENT ERKENNEN: Was will der Nutzer erreichen?
+   - Nutze dein Wissen über Baumaschinen um die Aufgabe zu verstehen
+   - Welche Art von Maschine braucht man für diese Aufgabe?
+   - Welche Parameter sind relevant (Breite, Tiefe, Gewicht, Leistung)?
+
+2. INTELLIGENT SUCHEN: Übersetze die Aufgabe in Datenbankabfragen
+   - Finde die passende geraetegruppe_name für die Aufgabe
+   - Nutze das PROPERTY COLUMNS CATALOG um relevante Spalten zu finden
+   - Filtere nach den genannten Parametern (z.B. Breite >= X)
+
+3. PROAKTIV HANDELN: Warte nicht auf perfekte Eingaben
+   - Der Nutzer kennt vielleicht nicht die Fachbegriffe - du schon
+   - Führe die nötigen SQL-Abfragen selbstständig durch
+   - Finde passende Maschinen basierend auf der Aufgabe
+
+4. EMPFEHLEN MIT BEGRÜNDUNG:
+   - Zeige welche Maschinen passen
+   - Erkläre WARUM sie passen (mit Daten aus der DB)
+   - Vergleiche Optionen wenn mehrere existieren
+
+INTELLIGENTE SUCHE MIT KORREKTUR:
+Nutzereingaben sind oft ungenau. Du MUSST:
+
+1. FLEXIBEL SUCHEN mit Varianten:
+   Bei Modellnummern/Codes IMMER beide Varianten suchen (mit und ohne Leerzeichen):
+   - "bw174" → suche BEIDE: '%bw174%' OR '%bw 174%'
+   - "bw 174" → suche BEIDE: '%bw 174%' OR '%bw174%'
+
+   SQL-Muster für flexible Suche:
+   WHERE (bezeichnung ILIKE '%bw174%' OR bezeichnung ILIKE '%bw 174%'
+          OR seriennummer ILIKE '%bw174%' OR seriennummer ILIKE '%bw 174%')
+
+2. BEI FOLGEFRAGEN ("ich meine..."):
+   - Behalte vorherige Filter (z.B. Hersteller, Verwendung) bei
+   - Nutze last_result_ids: WHERE id IN (...) AND <neue Suche mit Varianten>
+   - Suche IMMER mit beiden Varianten (mit/ohne Leerzeichen)
+
+3. NUTZER KORRIGIEREN: Wenn du Daten findest, die anders geschrieben sind als die Eingabe:
+   "Es gibt kein '[was Nutzer schrieb]', aber **[was in DB steht]** - [Ergebnisse]..."
+
+4. NUR wenn wirklich NICHTS passt (nach Varianten-Suche!): Sage "nicht gefunden".
+
+Ziel: Hilf dem Nutzer, die richtige Schreibweise zu lernen, während du seine Frage beantwortest.
+
+KOMPAKT/TUNNEL/BEENGT-ANFRAGEN:
+Wenn der Nutzer "klein", "kompakt", "Tunnel", "beengt", "enge Verhältnisse" sagt:
+- Suche BREIT: bezeichnung ILIKE '%mini%' OR '%800%' OR '%kompakt%'
+- Priorisiere nach Gewicht ASC (prop_e1730_gewicht_kg) wenn vorhanden
+- Behalte vorherige Constraints (z.B. Breite) bei
+- Zeige mindestens 3 Alternativen, nicht nur ein Modell
+- Erkläre Trade-offs (kleiner = weniger Leistung, aber manövrierfähiger)
+
+DURCHFAHRTSBREITE / TRANSPORTBREITE (WICHTIG):
+Wenn der Nutzer eine Durchfahrtsbreite nennt (z.B. "3m Durchfahrt", "muss durch 2,5m passen"):
+1. IMMER als Constraint-Verfeinerung behandeln wenn last_result_ids vorhanden
+2. Suche nach Transportbreite-Spalten: prop_e1150_arbeitsbreite_mm, prop_e1730_gewicht_kg als Proxy
+3. Wenn KEINE passende Breiten-Spalte existiert:
+   - Nutze Gewicht (prop_e1730_gewicht_kg) als Proxy für kompakte Maschinen
+   - Gib Top-5 leichteste passende Maschinen aus dem Kandidatenset
+   - Sage klar: "Transportbreite ist in der DB nicht gepflegt, daher nutze ich Gewicht als Näherung."
+4. Stelle genau 1 Rückfrage wenn unklar: "Meinst du Transportbreite der Maschine oder den Arbeitsbereich?"
+5. NIEMALS "keine Informationen" sagen - filtere stattdessen das Kandidatenset!
+
+KETTE VS MOBIL / VERGLEICHSFRAGEN (KRITISCH):
+Wenn der Nutzer nach "Kette oder Mobil/Rad?" fragt und es ein Kandidatenset gibt:
+1. IMMER SQL ausführen um das Kandidatenset zu analysieren!
+2. Zähle: Wie viele sind Kettenbagger vs Mobilbagger im Set?
+   SELECT geraetegruppe_name, COUNT(*) FROM ... WHERE id IN (...) GROUP BY geraetegruppe_name
+3. Zeige konkrete Zahlen: "Von deinen 5 Kandidaten sind 3 Kettenbagger und 2 Mobilbagger."
+4. Dann erkläre Trade-offs MIT Bezug auf die konkreten Maschinen
+5. NIEMALS generisch antworten wenn konkrete Daten verfügbar sind!
 
 KONTEXT-BEWUSSTSEIN (SEHR WICHTIG):
 Du siehst den gesamten Gesprächsverlauf. Nutze ihn IMMER!
-- Bei "davon", "diese", "wie viele sind..." → vorherige Filter beibehalten
-- Bei "zeige mir mehr" oder "Details" → auf vorherige Ergebnisse beziehen  
-- Bei Folgefragen → ALLE vorherigen Kriterien kombinieren
-Beispiel: "Mietmaschinen?" → "davon Bomag?" → "davon mit Klimaanlage?"
-= WHERE e.verwendung_code = 'MIET' AND e.hersteller_name ILIKE '%bomag%' AND e.prop_klimaanlage IS TRUE
+- Analysiere JEDE Anfrage im Kontext des bisherigen Gesprächs.
+- Entscheide selbstständig, ob die Anfrage sich auf vorherige Ergebnisse bezieht.
+- Bei Folgefragen → ALLE vorherigen Kriterien kombinieren und mit WHERE id IN (...) einschränken.
+- Wenn THREAD_CONTEXT last_result_ids enthält und die Anfrage eine Verfeinerung/Filterung zu sein scheint,
+  MUSST du diese IDs verwenden: WHERE id IN (...) AND <neue_bedingung>.
+
+Beispiel-Konversation:
+Q1: "Mietmaschinen?" → SELECT COUNT(*) ... WHERE verwendung_code = 'MIET'
+Q2: "davon Bomag?" → WHERE id IN (<ids_von_Q1>) AND hersteller_name ILIKE '%bomag%'
+Q3: "filtere weiter nach X" → WHERE id IN (<ids_von_Q2>) AND <flexible Suche nach X>
 
 Du bist wie ein Assistent der sich an alles erinnert was besprochen wurde!
 
-ANTWORTZIEL (KURZ & PRAEZISE):
+ANTWORTZIEL:
 - Beantworte nur die gestellte Frage, keine Extras.
-- Wenn etwas unklar ist: genau eine Rueckfrage.
-- Standard: 2-4 Saetze oder max. 5 Bulletpoints.
-- Laengere Antworten nur auf ausdrueckliche Bitte.
+- Wenn etwas unklar ist: genau eine Rückfrage.
+- Einfache Fragen (Zählen, Listen): kurz und kompakt (2-4 Sätze, max 5 Bullets).
+- Empfehlungen/Bauaufgaben: IMMER das STANDARD-FORMAT aus DETAILGRAD verwenden!
 
-SQL/DATENBANK (KOMPAKT):
-- MAX 3 Saetze
-- Zaehlen kurz: "45 Bomag-Mietmaschinen"
-- Listen: max 5 Bulletpoints
+SQL/DATENBANK:
+- Zählen kurz: "45 Bomag-Mietmaschinen"
+- Listen: max 5 Beispiele mit relevanten Daten
 
 DOKUMENTE (NUR AUF ANFRAGE):
-- Erklaerungen nur detailliert, wenn der Nutzer es explizit verlangt.
+- Erklärungen nur detailliert, wenn der Nutzer es explizit verlangt.
 
 EMPFEHLUNGEN (SEHR WICHTIG):
 - Gib niemals eine Empfehlung nur basierend auf **einem** Merkmal. Du musst immer mehrere Faktoren gegeneinander abwägen und das begründen (nur Fakten aus SQL).
@@ -114,43 +234,56 @@ EMPFEHLUNGS-WORKFLOW (Best Practice):
 5) Alternativen: Nenne 2-3 Alternativen + wann sie besser wären.
 
 MEHRKRITERIEN-RANKING (SQL-Hilfe):
-- Verfuegbarkeit: nuclos_state = 'Released' (raw: ibs_nuclet_geraete_nuclosstate). Locked nur als Fallback.
-- Nutzung: Wenn der Nutzer Miete will: verwendung_code = 'MIET' (raw: ibs_nuclet_geraete_verwendung ILIKE 'MIET -%').
-- Passgenauigkeit bei Zahlenanforderungen: z.B. fit_delta = COALESCE(prop_einbaubreite_max,0) - 3.0 (kleinste positive Differenz zuerst).
-- Datenvollständigkeit (um "alle anderen Props" einzubeziehen, ohne zu raten):
-  data_completeness = (SELECT COUNT(*) FROM jsonb_each(jsonb_strip_nulls(to_jsonb(e))))
-  -> mehr befüllte Felder = bessere Vergleichsbasis; wenn wichtige Felder fehlen, sag das explizit.
+- Verfügbarkeit: nuclos_state = 'Released'. Locked nur als Fallback.
+- Nutzung: verwendung_code = 'MIET' für Miete.
 
-WENN der Nutzer messbare Anforderungen nennt (z.B. "3m", "2,5m"):
-- MUSST du mit SQL gegen die Equipment-Tabelle validieren (siehe Schema oben).
-- Du musst die gesamte Kandidatenmenge berücksichtigen (mindestens via COUNT + Ranking-Query), nicht nur ein kleines Sample.
+NUMERISCHE VERGLEICHE (KRITISCH - prop_* Spalten sind TEXT!):
+Property-Spalten speichern Werte als TEXT mit deutschem Format (z.B. "3,20 m", "1,80").
+Für numerische Vergleiche diese Konvertierung verwenden (Komma → Punkt):
+  CAST(NULLIF(REPLACE(regexp_replace(spalte, '[^0-9,]', '', 'g'), ',', '.'), '') AS NUMERIC)
+
+Beispiel - Einbaubreite >= 2.5m:
+  WHERE CAST(NULLIF(REPLACE(regexp_replace(prop_e1480_einbaubreite_max_m, '[^0-9,]', '', 'g'), ',', '.'), '') AS NUMERIC) >= 2.5
+
+Beispiel - Gewicht < 5000kg (nur ganze Zahlen):
+  WHERE CAST(NULLIF(regexp_replace(prop_e1730_gewicht_kg, '[^0-9]', '', 'g'), '') AS NUMERIC) < 5000
 
 Für Fertiger/Asphalt-Einbau:
-- Breite primaer ueber prop_einbaubreite_max (raw: prop_e1480_einbaubreite_max_m) pruefen (z.B. >= 3.0).
-- Zusaetzlich vergleichen (falls vorhanden): prop_einbaubreite_grundbohle (raw: prop_e1470_einbaubreite_grundbohle_m), prop_einbaubreite_mit_verbreiterungen (raw: prop_e1490_einbaubreite_mit_verbreiterungen_m), prop_motor_leistung (raw: prop_e2180_motor_leistung_kw), prop_gewicht (raw: prop_e1730_gewicht_kg), nuclos_state, verwendung_code, data_completeness.
+- Breite: prop_e1480_einbaubreite_max_m (mit regexp_replace für Vergleich)
+- Weitere props: prop_e1470_einbaubreite_grundbohle_m, prop_e2180_motor_leistung_kw, prop_e1730_gewicht_kg
 
-FOLLOW-UPS:
-- Bei "welche davon/diese/die alle": beziehe dich auf das zuletzt gelistete Resultset (Thread Context) und halte Filter/Kriterien konstant.
+FOLLOW-UPS (DYNAMISCH ENTSCHEIDEN):
+- Entscheide selbst, ob eine Anfrage eine Folgefrage ist - nicht nur bei bestimmten Schlüsselwörtern.
+- Wenn last_result_ids im THREAD_CONTEXT vorhanden sind UND die Anfrage logisch darauf aufbaut:
+  → Verwende WHERE id IN (...) um auf dem vorherigen Ergebnis aufzubauen.
+- Typische Folgefrage-Muster (aber nicht darauf beschränkt): Verfeinerung, weitere Filter, Details anfordern, Eingrenzung.
+- Im Zweifel: Nutze die vorherigen IDs um Konversationskontinuität zu gewährleisten.
 
 SQL: Haupttabelle ist die Equipment-Tabelle aus dem Schema oben. prop_* sind direkte Spalten (BOOLEAN/DOUBLE/TEXT).
 HERSTELLER:
-- Hersteller koennen als Name oder Code vorliegen. Bei Filtern Name + Code beruecksichtigen (z.B. hersteller_name ILIKE '%bomag%' OR hersteller_code = 'BOM' OR ibs_nuclet_geraete_hersteller ILIKE '%BOM -%').
-Mietmaschinen: verwendung_code = 'MIET' (raw: ibs_nuclet_geraete_verwendung ILIKE 'MIET -%') (nur filtern, wenn der Nutzer explizit Miete will; sonst entweder alle verwendung_code zulassen oder Rueckfrage stellen).
+- Hersteller können als Name oder Code vorliegen. Bei Filtern Name + Code berücksichtigen (z.B. hersteller_name ILIKE '%bomag%' OR hersteller_code = 'BOM' OR ibs_nuclet_geraete_hersteller ILIKE '%BOM -%').
+Mietmaschinen: verwendung_code = 'MIET' (raw: ibs_nuclet_geraete_verwendung ILIKE 'MIET -%') (nur filtern, wenn der Nutzer explizit Miete will; sonst entweder alle verwendung_code zulassen oder Rückfrage stellen).
 
-KATEGORIE-ERKENNUNG (KRITISCH - HAEUFIGER FEHLER!):
-Begriffe wie "Kettenfertiger", "Radfertiger", "Mobilbagger", "Kettenbagger", "Kaltfraese" sind 
+KATEGORIE-ERKENNUNG (KRITISCH - NUTZE DEN COLUMN CATALOG!):
+Begriffe wie "Kettenfertiger", "Radfertiger", "Mobilbagger", "Kettenbagger", "Kaltfräse" sind
 geraetegruppe_name Werte - NICHT Property-Kombinationen!
 
-FALSCH (liefert 0 Ergebnisse):
-  WHERE geraetegruppe_name ILIKE '%fertiger%' AND prop_e2100_mobil_kette IS NOT NULL
-  
-RICHTIG:
-  WHERE geraetegruppe_name = 'Kettenfertiger'
-  WHERE geraetegruppe_name = 'Radfertiger'
-  WHERE geraetegruppe_name = 'Kaltfraese (Kette)'
+WICHTIG: Der COLUMN CATALOG unten zeigt dir:
+- ⚠️  EMPTY COLUMNS: Spalten die 100% NULL sind - NIEMALS verwenden!
+- 📊 CATEGORICAL VALUES: Echte Werte in geraetegruppe_name, hersteller_name, etc.
 
-Die Spalten prop_e2100_mobil_kette und prop_e2110_mobil_rad sind bei Fertigern LEER!
-Nutze stattdessen geraetegruppe_name fuer Kette/Rad-Unterscheidung bei Fertigern und Kaltfraesen.
+Wenn du unsicher bist welche Spalte Daten enthält:
+1. Prüfe den COLUMN CATALOG (unten) auf "EMPTY COLUMNS" Warnungen
+2. Nutze das explore_column Tool um Spalten zu untersuchen
+3. Bevorzuge geraetegruppe_name für Kategorien wie Kette/Mobil/Rad
+
+RICHTIGE ABFRAGEN:
+  WHERE geraetegruppe_name = 'Kettenfertiger'
+  WHERE geraetegruppe_name = 'Mobilbagger'
+  WHERE geraetegruppe_name ILIKE '%Kaltfräse%'
+
+Bei "Kette oder Mobil?" Fragen:
+  SELECT geraetegruppe_name, COUNT(*) FROM ... WHERE id IN (...) GROUP BY geraetegruppe_name
     """
 
     # Tool definitions for OpenAI function calling
@@ -192,6 +325,27 @@ Nutze stattdessen geraetegruppe_name fuer Kette/Rad-Unterscheidung bei Fertigern
                     "required": ["query"]
                 }
             }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "explore_column",
+                "description": "Explore a database column to see what values it contains. Use this BEFORE querying a column you're unsure about. Returns: distinct values, NULL ratio, and sample data. This helps you discover which columns have data vs are empty.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "column_name": {
+                            "type": "string",
+                            "description": "The column name to explore (e.g., 'geraetegruppe_name', 'prop_e2100_mobil_kette')"
+                        },
+                        "purpose": {
+                            "type": "string",
+                            "description": "Why you want to explore this column (helps with context)"
+                        }
+                    },
+                    "required": ["column_name", "purpose"]
+                }
+            }
         }
     ]
 
@@ -209,19 +363,30 @@ Nutze stattdessen geraetegruppe_name fuer Kette/Rad-Unterscheidung bei Fertigern
     def __init__(
         self,
         model: Optional[str] = None,
+        reasoning: Optional[str] = None,
+        temperature: Optional[float] = None,
+        max_output_tokens: Optional[int] = None,
         verbose: bool = False,
         pinecone_service=None
     ):
         """
         Initialize the single agent.
-        
+
         Args:
             model: OpenAI model to use (default from config)
+            reasoning: Reasoning effort override (none, low, medium, high)
+            temperature: Temperature override for generation
+            max_output_tokens: Max output tokens override
             verbose: Enable detailed logging
             pinecone_service: Optional Pinecone service for document search
         """
         self.verbose = verbose
-        self.provider = get_provider()
+        self.provider = get_provider(
+            model_override=model,
+            reasoning_override=reasoning,
+            temperature_override=temperature,
+            max_tokens_override=max_output_tokens
+        )
         self.model = self.provider.model
         self.postgres = PostgresService()
         self.pinecone = pinecone_service
@@ -229,6 +394,10 @@ Nutze stattdessen geraetegruppe_name fuer Kette/Rad-Unterscheidung bei Fertigern
         # Initialize column catalog for semantic column resolution (loads once, cached)
         column_catalog.initialize(self.postgres)
         self._log(f"ColumnCatalog initialized with {len(column_catalog.get_all_columns())} property columns")
+
+        # Initialize schema linker for reduced-schema SQL generation
+        schema_linker.initialize()
+        self._log(f"SchemaLinker initialized with {len(schema_linker.get_usable_columns())} usable columns")
 
         # SQL guard with lenient validation (strict_validation=False)
         self.sql_guard = SQLGuard(
@@ -239,9 +408,9 @@ Nutze stattdessen geraetegruppe_name fuer Kette/Rad-Unterscheidung bei Fertigern
         
         # Answer guard with relaxed limits
         self.answer_guard = AnswerGuard(
-            max_sentences=8,
-            max_bullets=10,
-            max_chars=2500,
+            max_sentences=12,
+            max_bullets=15,
+            max_chars=4500,
         )
 
         # Enhanced features (conditionally enabled)
@@ -267,6 +436,9 @@ Nutze stattdessen geraetegruppe_name fuer Kette/Rad-Unterscheidung bei Fertigern
         # Keyed by thread_key to avoid cross-user leakage in shared agent instances.
         self._thread_state: Dict[str, Dict[str, Any]] = {}
         self._thread_state_ttl_seconds: int = max(60, int(config.conversation_ttl_hours) * 3600)
+
+        # Current reduced schema (set per-query for validation)
+        self._current_reduced_schema: Optional[ReducedSchema] = None
 
         # Lazy-loaded manufacturer lookup (sql_export/manufacturers.csv).
         self._manufacturer_lookup: Optional[List[Dict[str, str]]] = None
@@ -358,9 +530,9 @@ Nutze stattdessen geraetegruppe_name fuer Kette/Rad-Unterscheidung bei Fertigern
             return None
 
         return (
-            "HERSTELLER-CODE HINWEISE (fuer SQL-Filter):\n"
+            "HERSTELLER-CODE HINWEISE (für SQL-Filter):\n"
             + "\n".join(hints)
-            + "\nNutze diese Codes zusaetzlich zu hersteller_name (z.B. hersteller_code = 'BOM')."
+            + "\nNutze diese Codes zusätzlich zu hersteller_name (z.B. hersteller_code = 'BOM')."
         )
 
     def _manufacturer_hints_for_query(self, user_query: Optional[str]) -> Optional[str]:
@@ -422,14 +594,16 @@ Nutze stattdessen geraetegruppe_name fuer Kette/Rad-Unterscheidung bei Fertigern
             "geraetegruppe_name",
             "verwendung_code",
             "nuclos_state",
-            "nuclos_process",
-            "prop_einbaubreite_max",
-            "prop_einbaubreite_grundbohle",
-            "prop_einbaubreite_mit_verbreiterungen",
-            "prop_arbeitsbreite",
-            "prop_motor_leistung",
-            "prop_gewicht",
-            "prop_klimaanlage",
+            # Raw property columns (actual DB column names)
+            "prop_e1480_einbaubreite_max_m",
+            "prop_e1470_einbaubreite_grundbohle_m",
+            "prop_e1490_einbaubreite_mit_verbreiterungen_m",
+            "prop_e1150_arbeitsbreite_mm",
+            "prop_e2180_motor_leistung_kw",
+            "prop_e1730_gewicht_kg",
+            "prop_e2040_klimaanlage",
+            "prop_e1740_grabtiefe_mm",
+            "prop_e2370_reichweite_m",
         ]
 
         minimized: List[Dict[str, Any]] = []
@@ -468,10 +642,13 @@ Nutze stattdessen geraetegruppe_name fuer Kette/Rad-Unterscheidung bei Fertigern
             sample_json = json.dumps(state["last_sql_results_sample"], ensure_ascii=False, default=str)
             parts.append(f"- last_sql_results_sample: {sample_json}")
 
-        parts.append("FOLLOW-UP RULES:")
-        parts.append("- If the user says 'davon/diese/die/alle/welche davon': refer to last_result_ids and keep the same filters.")
+        parts.append("FOLLOW-UP HANDLING (CRITICAL - USE YOUR JUDGMENT):")
+        parts.append("- Analyze the user's query in context of the conversation.")
+        parts.append("- If the query appears to refine, filter, or continue from previous results, use last_result_ids with WHERE id IN (...).")
+        parts.append("- Examples of follow-up intent: 'filtere weiter', 'davon', 'diese', 'nur die mit X', 'und auch Y', 'eingrenzen', 'weiter nach Z', etc.")
+        parts.append("- When in doubt about follow-up intent: USE the previous result IDs to maintain conversation continuity.")
         table = getattr(self.postgres, "equipment_table", None) or "<equipment_table>"
-        parts.append(f"- If you need more fields for those rows, query with: SELECT ... FROM {table} WHERE id IN (...).")
+        parts.append(f"- Query pattern for follow-ups: SELECT ... FROM {table} WHERE id IN (...) AND <new_filter>;")
         return "\n".join(parts)
 
     def _build_documents_context(self, results: List[Dict[str, Any]]) -> str:
@@ -497,7 +674,7 @@ Nutze stattdessen geraetegruppe_name fuer Kette/Rad-Unterscheidung bei Fertigern
             "## INTERNE DOKUMENTE (Pinecone Suche)\n"
             f"{joined}\n\n"
             "REGELN:\n"
-            "- Nutze diese internen Dokumente als Primaerquelle.\n"
+            "- Nutze diese internen Dokumente als Primärquelle.\n"
             "- Nenne Quellen nur, wenn der Nutzer explizit danach fragt (z.B. \"Quelle\", \"Quellen\", \"Beleg\", \"Source\").\n"
             "- Wenn die Dokumente die Frage nicht beantworten: sag das und frage gezielt nach fehlenden Details."
         )
@@ -587,6 +764,50 @@ Nutze stattdessen geraetegruppe_name fuer Kette/Rad-Unterscheidung bei Fertigern
                 prefers_sql=False,
                 prefers_documents=False,
             )
+
+        # Force follow-up detection for clarification patterns when we have previous context
+        # This handles cases like "ich meine bw 174" after a failed "bw174" search
+        # Also handles numeric constraints like "durchfahrtsbreite 3m" as follow-up refinements
+        # And comparison questions like "Kette oder Mobil?" when there's a candidate set
+        #
+        # IMPORTANT: Use 'is not None' check, not truthiness, because [] is falsy but still means
+        # we had a previous SQL query (just with 0 results). We want to preserve context.
+        prev_result_ids = thread_state.get("last_result_ids")
+        has_prev_context = (
+            prev_result_ids is not None or  # Had previous SQL (even if 0 results)
+            thread_state.get("last_sql_purpose") or  # Had previous SQL purpose
+            thread_state.get("last_sql_row_count") is not None  # Had previous row count
+        )
+
+        if not intent.followup_ids and has_prev_context:
+            query_stripped = (user_query or "").strip()
+            is_short = len(query_stripped) <= 25
+            is_clarification = bool(re.search(
+                r"\bich\s+meine\b|\bmeine\s+ich\b|\bnein[,\s]|\bmit\s+leerzeichen\b|\bso:\s*",
+                query_stripped, re.IGNORECASE
+            ))
+            # Detect numeric measurements (3m, 5000kg, 50kW, etc.) - these are constraint refinements
+            has_measurement = bool(re.search(
+                r"\b(\d+(?:[.,]\d+)?)\s*(mm|cm|m|kg|t|kw|ps|meter|kilogramm|tonnen)\b",
+                query_stripped, re.IGNORECASE
+            ))
+            # Also check for extracted width
+            has_width = self._extract_width_m(query_stripped) is not None
+            # Detect comparison/choice questions (Kette oder Mobil, etc.) - need SQL to analyze candidate set
+            is_comparison = bool(re.search(
+                r"\b(kette|mobil|rad)\s+(oder|vs|versus)\s+(kette|mobil|rad)\b|"
+                r"\bempfiehlst\s+du\b|\bwelche[rs]?\s+(ist|sind)\s+besser\b|"
+                r"\b(vergleich|unterschied)\b",
+                query_stripped, re.IGNORECASE
+            ))
+
+            if is_short or is_clarification or has_measurement or has_width or is_comparison:
+                # Use previous IDs if available, otherwise empty list (still forces SQL)
+                intent.followup_ids = prev_result_ids if prev_result_ids else []
+                intent.prefers_sql = True
+                intent.requires_sql = True
+                self._log(f"Forced follow-up detection: short={is_short}, clarification={is_clarification}, measurement={has_measurement}, width={has_width}, comparison={is_comparison}, prev_ids={len(prev_result_ids) if prev_result_ids else 0}")
+
         execution_logs.append({
             "event": "sql_intent",
             "intent": intent.to_dict(),
@@ -596,6 +817,14 @@ Nutze stattdessen geraetegruppe_name fuer Kette/Rad-Unterscheidung bei Fertigern
         # Enhanced context management
         ctx = context_manager.get_context(tk)
         ctx = context_manager.update_context(tk, user_query)
+
+        # Sync thread_state into ctx so context has access to previous results
+        if thread_state.get("last_result_ids"):
+            ctx.last_result_ids = thread_state["last_result_ids"]
+        if thread_state.get("last_sql_purpose"):
+            ctx.last_sql_purpose = thread_state["last_sql_purpose"]
+        if thread_state.get("last_sql_results_sample"):
+            ctx.last_results_sample = thread_state["last_sql_results_sample"]
 
         # Planning phase (if enabled)
         query_plan = None
@@ -641,9 +870,17 @@ Nutze stattdessen geraetegruppe_name fuer Kette/Rad-Unterscheidung bei Fertigern
         if system_instructions:
             system_prompt = f"{system_instructions}\n\n---\n\n{self.SYSTEM_PROMPT}"
 
-        # Add column catalog for semantic column resolution (cached, loaded once at startup)
-        column_catalog_section = column_catalog.get_prompt_section()
-        system_prompt = f"{system_prompt}\n\n{column_catalog_section}"
+        # Get reduced schema for this query (semantic column retrieval)
+        # This replaces the full column catalog with only relevant columns
+        reduced_schema = schema_linker.get_reduced_schema(user_query, top_k=15)
+        reduced_schema_section = reduced_schema.to_prompt()
+        self._log(f"Reduced schema: {len(reduced_schema.allowed_columns)} columns (core: {len(reduced_schema.core_columns)})")
+
+        # Add reduced schema to prompt (replaces full column_catalog)
+        system_prompt = f"{system_prompt}\n\n{reduced_schema_section}"
+
+        # Store reduced schema for validation
+        self._current_reduced_schema = reduced_schema
 
         # Inject learned rules from user feedback at the start of system prompt
         try:
@@ -671,8 +908,13 @@ Nutze stattdessen geraetegruppe_name fuer Kette/Rad-Unterscheidung bei Fertigern
         if policy_message:
             messages.append({"role": "system", "content": policy_message})
 
-        # Inject enhanced context
-        if ctx and (ctx.is_followup or ctx.last_result_ids):
+        # Inject enhanced context - always when there's previous state, let LLM decide relevance
+        has_previous_state = (
+            thread_state.get("last_result_ids") or
+            thread_state.get("last_sql_purpose") or
+            ctx.turn_count > 0
+        )
+        if ctx and has_previous_state:
             messages.append({"role": "system", "content": ctx.to_prompt_section()})
 
         # Inject query plan
@@ -740,11 +982,19 @@ Nutze stattdessen geraetegruppe_name fuer Kette/Rad-Unterscheidung bei Fertigern
                     tool_calls=m.get("tool_calls"),
                 ) for m in msgs]
 
+            # Determine tool_choice: force execute_sql for SQL-requiring intents
+            # This ensures the model always queries the DB for equipment/recommendation questions
+            if intent.requires_sql or intent.prefers_sql:
+                initial_tool_choice = {"type": "function", "function": {"name": "execute_sql"}}
+                self._log("Forcing execute_sql tool choice based on intent")
+            else:
+                initial_tool_choice = "auto"
+
             # Initial call with tools
             chat_response = await self.provider.chat_completion(
                 messages=to_chat_messages(messages),
                 tools=self.get_tools(),
-                tool_choice="auto",
+                tool_choice=initial_tool_choice,
                 max_tokens=max_completion_tokens
             )
 
@@ -831,14 +1081,22 @@ Nutze stattdessen geraetegruppe_name fuer Kette/Rad-Unterscheidung bei Fertigern
                             else:
                                 # Persist last SQL results per thread for pronoun follow-ups ("davon/diese").
                                 rows = result.get("results") or []
+                                new_ids = self._extract_result_ids(rows, max_ids=25)
                                 state = self._thread_state.get(tk, {})
+
+                                # IMPORTANT: Preserve previous IDs if this query returned 0 results
+                                # This maintains context for follow-up refinement questions
+                                # Only update last_result_ids if we got actual results
+                                if new_ids:
+                                    state["last_result_ids"] = new_ids
+                                    state["last_sql_results_sample"] = self._minimize_sql_rows(rows, max_rows=10)
+                                # If 0 results, keep previous IDs for context but note the 0-result query
+
                                 state.update({
                                     "last_sql_error": None,
                                     "last_sql_purpose": result.get("purpose"),
                                     "last_sql": result.get("sql"),
                                     "last_sql_row_count": result.get("row_count"),
-                                    "last_result_ids": self._extract_result_ids(rows, max_ids=25),
-                                    "last_sql_results_sample": self._minimize_sql_rows(rows, max_rows=10),
                                 })
                                 if state.get("target_width_m") is None:
                                     state["target_width_m"] = self._extract_width_m(user_query or "")
@@ -970,6 +1228,8 @@ Nutze stattdessen geraetegruppe_name fuer Kette/Rad-Unterscheidung bei Fertigern
             return await self._execute_sql(args, intent=intent, thread_key=thread_key)
         elif tool_name == "search_documents":
             return await self._search_documents(args)
+        elif tool_name == "explore_column":
+            return await self._explore_column(args)
         elif tool_name == "calculate":
             return self._execute_calculate(args)
         elif tool_name == "compare":
@@ -1152,6 +1412,10 @@ Nutze stattdessen geraetegruppe_name fuer Kette/Rad-Unterscheidung bei Fertigern
                 sql = verification.corrected_sql
                 self._log(f"SQL auto-corrected: {verification.issues}")
 
+        def _normalize_decimal_commas(sql_text: str) -> str:
+            """Convert German decimal commas to dots in numeric literals (e.g., 1,80 -> 1.80)."""
+            return re.sub(r"(?<!\w)(\d+),(\d+)(?!\w)", r"\1.\2", sql_text)
+
         prepared_sql, error = self.postgres.prepare_readonly_sql(sql, default_limit=10000)
         if error:
             return {
@@ -1160,46 +1424,62 @@ Nutze stattdessen geraetegruppe_name fuer Kette/Rad-Unterscheidung bei Fertigern
                 "error": error,
             }
 
+        # Normalize decimal commas before execution
+        prepared_sql = _normalize_decimal_commas(prepared_sql)
+
         try:
             results = self.postgres.execute_query(prepared_sql, raise_on_error=True)
         except Exception as e:
+            error_str = str(e)
+            # Auto-retry on numeric parse errors (German comma format in data)
+            if "invalid input syntax for type numeric" in error_str:
+                self._log(f"Numeric parse error, likely German decimal format in data: {error_str}")
+                # The error is in the DATA, not SQL - can't fix by normalizing SQL
+                # Return helpful error message
+                return {
+                    "purpose": purpose,
+                    "sql": prepared_sql,
+                    "error": f"Datenformat-Fehler: Die Spalte enthält Text mit deutschem Zahlenformat. Verwende regexp_replace für numerische Vergleiche.",
+                    "hint": "Use: CAST(NULLIF(REPLACE(regexp_replace(col, '[^0-9,]', '', 'g'), ',', '.'), '') AS NUMERIC)",
+                }
             return {
                 "purpose": purpose,
                 "sql": prepared_sql,
-                "error": str(e),
+                "error": error_str,
             }
         
+        # Return ONLY minimized fields to prevent model from inventing/hallucinating data
+        # This forces the model to use exact values from the results
+        minimized_results = self._minimize_sql_rows(results, max_rows=50)
+
         return {
             "purpose": purpose,
             "sql": prepared_sql,
             "row_count": len(results),
-            "results": results[:50] if len(results) > 50 else results,
+            "results": minimized_results,
             "truncated": len(results) > 50,
             "validation_warnings": validation.warnings if validation else [],
-            "referenced_tables": validation.referenced_tables if validation else [],
-            "referenced_columns": validation.referenced_columns if validation else [],
-            "limit_value": validation.limit_value if validation else None,
         }
 
     async def _search_documents(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """
         Search documents in Pinecone.
-        
+
         Args:
             args: Contains 'query'
-            
+
         Returns:
             Search results or message if not available
         """
         query = args.get("query", "")
         self._log(f"Document search: {query}")
-        
+
         if not self.pinecone:
             return {
                 "message": "Dokumentensuche nicht verfügbar",
                 "results": []
             }
-        
+
         try:
             results = await self.pinecone.search(query, top_k=config.search_top_k)
             return {
@@ -1208,6 +1488,120 @@ Nutze stattdessen geraetegruppe_name fuer Kette/Rad-Unterscheidung bei Fertigern
             }
         except Exception as e:
             return {"error": str(e)}
+
+    async def _explore_column(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Explore a database column to discover what values it contains.
+
+        This tool helps the AI discover:
+        - Which columns have data vs are empty
+        - What distinct values exist in categorical columns
+        - Sample values for understanding data format
+
+        Args:
+            args: Contains 'column_name' and 'purpose'
+
+        Returns:
+            Column statistics and sample values
+        """
+        column_name = args.get("column_name", "")
+        purpose = args.get("purpose", "")
+
+        self._log(f"Exploring column: {column_name} ({purpose})")
+
+        if not self.postgres.available:
+            return {
+                "column": column_name,
+                "purpose": purpose,
+                "error": "Database not available"
+            }
+
+        # First check if we already know this column is empty
+        if column_catalog.is_column_empty(column_name):
+            # Get recommendation for alternative
+            recommendation = column_catalog.get_column_recommendation(column_name)
+            return {
+                "column": column_name,
+                "purpose": purpose,
+                "is_empty": True,
+                "null_ratio": 1.0,
+                "distinct_count": 0,
+                "distinct_values": [],
+                "warning": f"This column is 100% NULL - it has no data!",
+                "recommendation": recommendation or "Use geraetegruppe_name for equipment type distinctions like Kette/Mobil/Rad."
+            }
+
+        table = self.postgres.equipment_table
+
+        try:
+            # Get NULL ratio
+            stats_result = self.postgres.execute_query(
+                f"SELECT COUNT(*) as total, COUNT({column_name}) as non_null "
+                f"FROM {table}"
+            )
+            total = stats_result[0].get("total", 0) if stats_result else 0
+            non_null = stats_result[0].get("non_null", 0) if stats_result else 0
+            null_ratio = 1.0 - (non_null / total) if total > 0 else 1.0
+
+            # Check if column is empty
+            if non_null == 0:
+                recommendation = column_catalog.get_column_recommendation(column_name)
+                return {
+                    "column": column_name,
+                    "purpose": purpose,
+                    "is_empty": True,
+                    "null_ratio": 1.0,
+                    "distinct_count": 0,
+                    "distinct_values": [],
+                    "warning": "This column is 100% NULL - it has no data!",
+                    "recommendation": recommendation or "Try exploring geraetegruppe_name for equipment type data."
+                }
+
+            # Get distinct values (for categorical columns)
+            distinct_result = self.postgres.execute_query(
+                f"SELECT DISTINCT {column_name} as value, COUNT(*) as count "
+                f"FROM {table} "
+                f"WHERE {column_name} IS NOT NULL "
+                f"GROUP BY {column_name} "
+                f"ORDER BY count DESC "
+                f"LIMIT 25"
+            )
+
+            distinct_values = []
+            for row in (distinct_result or []):
+                val = row.get("value")
+                cnt = row.get("count", 0)
+                if val is not None:
+                    distinct_values.append({"value": str(val)[:100], "count": cnt})
+
+            # Get sample values
+            sample_result = self.postgres.execute_query(
+                f"SELECT {column_name} as value "
+                f"FROM {table} "
+                f"WHERE {column_name} IS NOT NULL "
+                f"LIMIT 5"
+            )
+            sample_values = [str(row.get("value"))[:100] for row in (sample_result or []) if row.get("value")]
+
+            return {
+                "column": column_name,
+                "purpose": purpose,
+                "is_empty": False,
+                "total_rows": total,
+                "non_null_rows": non_null,
+                "null_ratio": round(null_ratio, 3),
+                "distinct_count": len(distinct_values),
+                "distinct_values": distinct_values[:15],  # Top 15 by frequency
+                "sample_values": sample_values,
+                "has_more_distinct": len(distinct_values) >= 25
+            }
+
+        except Exception as e:
+            return {
+                "column": column_name,
+                "purpose": purpose,
+                "error": str(e)
+            }
 
     def _execute_calculate(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Execute calculate tool."""
@@ -1267,14 +1661,33 @@ Nutze stattdessen geraetegruppe_name fuer Kette/Rad-Unterscheidung bei Fertigern
         }
 
 
-def create_single_agent(verbose: bool = False, pinecone_service=None) -> SingleAgent:
+def create_single_agent(
+    verbose: bool = False,
+    pinecone_service=None,
+    model: Optional[str] = None,
+    reasoning: Optional[str] = None,
+    temperature: Optional[float] = None,
+    max_output_tokens: Optional[int] = None
+) -> SingleAgent:
     """
     Factory function to create a configured SingleAgent.
-    
+
     Args:
         verbose: Enable detailed logging
-        
+        pinecone_service: Optional Pinecone service for document search
+        model: Optional model override (e.g., "gpt-4o", "gpt-5.2")
+        reasoning: Optional reasoning effort override (none, low, medium, high)
+        temperature: Optional temperature override
+        max_output_tokens: Optional max output tokens override
+
     Returns:
         Configured SingleAgent instance
     """
-    return SingleAgent(verbose=verbose, pinecone_service=pinecone_service)
+    return SingleAgent(
+        model=model,
+        reasoning=reasoning,
+        temperature=temperature,
+        max_output_tokens=max_output_tokens,
+        verbose=verbose,
+        pinecone_service=pinecone_service
+    )

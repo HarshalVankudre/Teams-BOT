@@ -3,12 +3,17 @@ Column Catalog for Semantic Column Resolution.
 
 Loads all database columns at startup and provides them to the LLM
 in a format that enables semantic understanding of user queries.
+
+Enhanced with column statistics to help the AI discover:
+- Which columns are empty (always NULL) vs populated
+- Distinct values for categorical columns
+- Data quality indicators
 """
 import csv
 import re
 from pathlib import Path
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Set
 
 import logging
 
@@ -26,6 +31,11 @@ class ColumnInfo:
     category: str             # dimension, boolean, identifier, category
     description: str          # Human-readable description
     parse_hint: Optional[str] # How to parse (e.g., "extract numeric from TEXT")
+    # Statistics (populated from database)
+    null_ratio: float = 1.0   # Ratio of NULL values (1.0 = all NULL, 0.0 = no NULLs)
+    distinct_values: Optional[List[str]] = None  # For categorical columns, top distinct values
+    is_empty: bool = True     # True if column is 100% NULL (useless for queries)
+    sample_values: Optional[List[str]] = None  # Sample non-NULL values
 
 
 class ColumnCatalog:
@@ -51,6 +61,22 @@ class ColumnCatalog:
         "nuclos_state": "Availability: Released (available) or Locked (not available)",
     }
 
+    # Categorical columns for which we should fetch distinct values
+    CATEGORICAL_COLUMNS = [
+        "geraetegruppe_name",
+        "hersteller_name",
+        "verwendung_code",
+        "nuclos_state",
+    ]
+
+    # Columns that need statistics to determine if they're empty
+    # These are commonly expected but often have no data
+    MOBILITY_COLUMNS = [
+        "prop_e2100_mobil_kette",
+        "prop_e2110_mobil_rad",
+        "prop_e2120_mobil_semi",  # Note: e2120, not e2115
+    ]
+
     # Unit patterns for categorization
     UNIT_PATTERNS = {
         "mm": "millimeter",
@@ -72,6 +98,10 @@ class ColumnCatalog:
         self._columns: Dict[str, ColumnInfo] = {}
         self._cached_prompt: Optional[str] = None
         self._initialized: bool = False
+        # Statistics from database
+        self._categorical_values: Dict[str, List[str]] = {}  # column -> distinct values
+        self._empty_columns: Set[str] = set()  # Columns that are 100% NULL
+        self._column_stats_loaded: bool = False
 
     def initialize(self, postgres_service: Optional[Any] = None) -> None:
         """
@@ -88,12 +118,15 @@ class ColumnCatalog:
         # Try to get actual columns from database for validation
         if postgres_service and getattr(postgres_service, "available", False):
             self._validate_with_database(postgres_service)
+            # Load column statistics (NULL ratios, distinct values for categoricals)
+            self._load_column_statistics(postgres_service)
 
         # Build the cached prompt section
         self._cached_prompt = self._build_prompt_section()
         self._initialized = True
 
-        logger.info(f"[ColumnCatalog] Initialized with {len(self._columns)} property columns")
+        stats_info = f", {len(self._empty_columns)} empty columns detected" if self._column_stats_loaded else ""
+        logger.info(f"[ColumnCatalog] Initialized with {len(self._columns)} property columns{stats_info}")
 
     def _load_from_csv(self, csv_path: Path) -> None:
         """Load property metadata from CSV file."""
@@ -209,6 +242,93 @@ class ColumnCatalog:
         except Exception as e:
             logger.debug(f"[ColumnCatalog] Database validation skipped: {e}")
 
+    def _load_column_statistics(self, postgres_service: Any) -> None:
+        """
+        Load column statistics from database:
+        1. Distinct values for categorical columns (geraetegruppe_name, etc.)
+        2. NULL ratios for mobility columns to detect empty columns
+
+        This enables the LLM to know which columns have data and what values exist.
+        """
+        table = getattr(postgres_service, "equipment_table", "equipment_matrix")
+
+        # 1. Load distinct values for categorical columns
+        for col in self.CATEGORICAL_COLUMNS:
+            try:
+                result = postgres_service.execute_query(
+                    f"SELECT DISTINCT {col} FROM {table} "
+                    f"WHERE {col} IS NOT NULL "
+                    f"ORDER BY {col} LIMIT 50"
+                )
+                if result:
+                    values = [row.get(col) for row in result if row.get(col)]
+                    self._categorical_values[col] = values
+                    logger.debug(f"[ColumnCatalog] {col}: {len(values)} distinct values")
+            except Exception as e:
+                logger.debug(f"[ColumnCatalog] Failed to load {col} values: {e}")
+
+        # 2. Check mobility columns for NULL ratio (these are often completely empty or nearly empty)
+        # We consider a column "effectively empty" if >99% of values are NULL
+        EMPTY_THRESHOLD = 0.99  # 99% NULL = effectively unusable
+
+        for col in self.MOBILITY_COLUMNS:
+            try:
+                result = postgres_service.execute_query(
+                    f"SELECT COUNT(*) as total, "
+                    f"COUNT({col}) as non_null "
+                    f"FROM {table}"
+                )
+                if result:
+                    total = result[0].get("total", 0)
+                    non_null = result[0].get("non_null", 0)
+                    null_ratio = 1.0 - (non_null / total) if total > 0 else 1.0
+                    # Mark as empty if NULL ratio exceeds threshold
+                    if null_ratio >= EMPTY_THRESHOLD:
+                        self._empty_columns.add(col)
+                        logger.info(f"[ColumnCatalog] {col} is effectively EMPTY ({null_ratio*100:.1f}% NULL)")
+                        # Update the ColumnInfo if it exists
+                        if col in self._columns:
+                            self._columns[col].is_empty = True
+                            self._columns[col].null_ratio = null_ratio
+            except Exception as e:
+                logger.debug(f"[ColumnCatalog] Failed to check {col} NULL ratio: {e}")
+
+        # 3. Check a sample of prop columns for data quality
+        try:
+            # Get columns that exist in the database
+            result = postgres_service.execute_query(
+                "SELECT column_name FROM information_schema.columns "
+                f"WHERE table_name = '{table}' AND column_name LIKE 'prop_%'"
+            )
+            if result:
+                db_columns = [row.get("column_name") for row in result]
+                # Check a sample of important prop columns
+                sample_columns = [c for c in db_columns if c in self._columns][:20]
+                for col in sample_columns:
+                    try:
+                        stats_result = postgres_service.execute_query(
+                            f"SELECT COUNT(*) as total, COUNT({col}) as non_null "
+                            f"FROM {table}"
+                        )
+                        if stats_result:
+                            total = stats_result[0].get("total", 0)
+                            non_null = stats_result[0].get("non_null", 0)
+                            if total > 0:
+                                null_ratio = 1.0 - (non_null / total)
+                                if col in self._columns:
+                                    self._columns[col].null_ratio = null_ratio
+                                    self._columns[col].is_empty = (non_null == 0)
+                                    if non_null == 0:
+                                        self._empty_columns.add(col)
+                    except Exception:
+                        pass  # Silently skip columns that fail
+        except Exception as e:
+            logger.debug(f"[ColumnCatalog] Failed to load prop column stats: {e}")
+
+        self._column_stats_loaded = True
+        logger.info(f"[ColumnCatalog] Loaded statistics: {len(self._categorical_values)} categorical columns, "
+                   f"{len(self._empty_columns)} empty columns")
+
     def _build_prompt_section(self) -> str:
         """Build the prompt section for the LLM."""
         lines = []
@@ -219,9 +339,42 @@ class ColumnCatalog:
         lines.append("=" * 70)
         lines.append("")
 
+        # CRITICAL: Show empty columns first so the LLM knows to avoid them
+        if self._empty_columns:
+            lines.append("⚠️  EMPTY COLUMNS (100% NULL - DO NOT USE!):")
+            lines.append("-" * 50)
+            for col in sorted(self._empty_columns):
+                info = self._columns.get(col)
+                if info:
+                    lines.append(f"  {col} -> {info.display_name} [ALWAYS NULL - USELESS]")
+                else:
+                    lines.append(f"  {col} [ALWAYS NULL - USELESS]")
+            lines.append("")
+            lines.append("These columns exist but contain NO DATA. Never query them!")
+            lines.append("Use geraetegruppe_name instead for Kette/Mobil/Rad distinction.")
+            lines.append("")
+
+        # Show categorical column values
+        if self._categorical_values:
+            lines.append("📊 CATEGORICAL COLUMN VALUES (use these for filtering):")
+            lines.append("-" * 50)
+            for col, values in self._categorical_values.items():
+                if values:
+                    # Show first 15 values
+                    display_values = values[:15]
+                    lines.append(f"  {col}:")
+                    for v in display_values:
+                        lines.append(f"    - '{v}'")
+                    if len(values) > 15:
+                        lines.append(f"    ... and {len(values) - 15} more")
+            lines.append("")
+
         # Group by category
         categories: Dict[str, List[ColumnInfo]] = {}
         for col_name, info in sorted(self._columns.items()):
+            # Skip empty columns in the main listing
+            if col_name in self._empty_columns:
+                continue
             if info.category not in categories:
                 categories[info.category] = []
             categories[info.category].append(info)
@@ -249,6 +402,9 @@ class ColumnCatalog:
                 entry += f" -> {info.display_name}"
                 if info.unit:
                     entry += f" [{info.unit}]"
+                # Show data quality indicator
+                if info.null_ratio >= 0.9 and info.null_ratio < 1.0:
+                    entry += " [sparse data]"
                 lines.append(entry)
             lines.append("")
 
@@ -269,11 +425,84 @@ class ColumnCatalog:
 
         return "\n".join(lines)
 
-    def get_prompt_section(self) -> str:
-        """Get the cached prompt section for LLM system prompt."""
+    def get_prompt_section(self, compact: bool = False) -> str:
+        """Get the cached prompt section for LLM system prompt.
+
+        Args:
+            compact: If True, return a compact version with only key columns and patterns.
+                    Reduces prompt size significantly for faster responses.
+        """
         if not self._initialized:
             raise RuntimeError("ColumnCatalog not initialized. Call initialize() first.")
+
+        if compact:
+            return self._build_compact_prompt()
         return self._cached_prompt or ""
+
+    def _build_compact_prompt(self) -> str:
+        """Build a compact version of the prompt (much smaller)."""
+        lines = []
+        lines.append("PROPERTY COLUMNS (compact reference):")
+        lines.append("Column format: prop_<code>_<name>_<unit>")
+        lines.append("")
+
+        # CRITICAL: Show empty columns first
+        if self._empty_columns:
+            lines.append("⚠️  EMPTY COLUMNS (NEVER USE - 100% NULL):")
+            for col in sorted(self._empty_columns):
+                lines.append(f"  {col} [ALWAYS NULL]")
+            lines.append("Use geraetegruppe_name for Kette/Mobil/Rad!")
+            lines.append("")
+
+        # Show key categorical values
+        if "geraetegruppe_name" in self._categorical_values:
+            values = self._categorical_values["geraetegruppe_name"]
+            lines.append("GERAETEGRUPPE_NAME VALUES (use for equipment type):")
+            for v in values[:20]:
+                lines.append(f"  - '{v}'")
+            if len(values) > 20:
+                lines.append(f"  ... and {len(values) - 20} more")
+            lines.append("")
+
+        # Group key columns by function (excluding empty ones)
+        key_dimensions = [
+            ("prop_e1150_arbeitsbreite_mm", "Arbeitsbreite [mm]"),
+            ("prop_e1480_einbaubreite_max_m", "Einbaubreite max [m]"),
+            ("prop_e1470_einbaubreite_grundbohle_m", "Einbaubreite Grundbohle [m]"),
+            ("prop_e1740_grabtiefe_mm", "Grabtiefe [mm]"),
+            ("prop_e2370_reichweite_m", "Reichweite [m]"),
+            ("prop_e1730_gewicht_kg", "Gewicht [kg]"),
+            ("prop_e2180_motor_leistung_kw", "Motor Leistung [kW]"),
+            ("prop_e2490_tragfahigkeit_kg", "Tragfähigkeit [kg]"),
+            ("prop_e1900_hubhohe_m", "Hubhöhe [m]"),
+        ]
+
+        key_booleans = [
+            ("prop_e1110_allradantrieb", "Allradantrieb"),
+            ("prop_e2040_klimaanlage", "Klimaanlage"),
+        ]
+        # Note: prop_e2100_mobil_kette and prop_e2110_mobil_rad are excluded (always NULL)
+
+        lines.append("KEY DIMENSIONS (extract numeric with regexp_replace):")
+        for col, desc in key_dimensions:
+            if col not in self._empty_columns:
+                lines.append(f"  {col} -> {desc}")
+
+        lines.append("")
+        lines.append("KEY BOOLEAN FEATURES (check 'Ja' or IS NOT NULL):")
+        for col, desc in key_booleans:
+            if col not in self._empty_columns:
+                lines.append(f"  {col} -> {desc}")
+
+        lines.append("")
+        lines.append("SQL PATTERNS:")
+        lines.append("  Numeric from TEXT: CAST(NULLIF(regexp_replace(col, '[^0-9]', '', 'g'), '') AS NUMERIC)")
+        lines.append("  Boolean check: WHERE col = 'Ja' OR col IS NOT NULL")
+        lines.append("")
+        lines.append(f"Total property columns available: {len(self._columns)}")
+        lines.append("For complete list, query: SELECT column_name FROM information_schema.columns WHERE column_name LIKE 'prop_%'")
+
+        return "\n".join(lines)
 
     def get_column_info(self, column_name: str) -> Optional[ColumnInfo]:
         """Get info for a specific column."""
@@ -293,6 +522,44 @@ class ColumnCatalog:
                 term_lower in info.description.lower()):
                 results.append(info)
         return results
+
+    def get_categorical_values(self, column: str) -> List[str]:
+        """Get distinct values for a categorical column."""
+        return self._categorical_values.get(column, [])
+
+    def is_column_empty(self, column: str) -> bool:
+        """Check if a column is known to be empty (100% NULL)."""
+        return column in self._empty_columns
+
+    def get_empty_columns(self) -> Set[str]:
+        """Get all columns that are known to be empty."""
+        return self._empty_columns.copy()
+
+    def get_column_recommendation(self, user_term: str) -> Optional[str]:
+        """
+        Get a column recommendation based on user's term.
+
+        This helps when the user asks about something that maps to a column
+        differently than expected (e.g., "Kette" -> geraetegruppe_name, not prop_e2100_mobil_kette).
+
+        Returns recommendation string or None.
+        """
+        term_lower = user_term.lower()
+
+        # Special case: Kette/Mobil/Rad → use geraetegruppe_name
+        if any(t in term_lower for t in ["kette", "mobil", "rad", "semi"]):
+            if "geraetegruppe_name" in self._categorical_values:
+                values = self._categorical_values["geraetegruppe_name"]
+                relevant = [v for v in values if any(
+                    t in v.lower() for t in ["kette", "mobil", "rad"]
+                )]
+                if relevant:
+                    return (
+                        f"For '{user_term}' queries, use geraetegruppe_name column. "
+                        f"Available values: {', '.join(relevant[:5])}"
+                    )
+
+        return None
 
 
 # Global singleton instance
