@@ -923,10 +923,25 @@ Bei "Kette oder Mobil?" Fragen:
             if plan_section:
                 messages.append({"role": "system", "content": plan_section})
 
-        # Add conversation history if provided
+        # Add conversation history if provided (filter out failure responses that could bias the model)
         if conversation_history:
             max_messages = max(2, int(config.conversation_max_messages))
+            filtered_history = []
             for msg in conversation_history[-max_messages:]:
+                content = msg.get("content", "")
+                # Skip assistant messages that are just failure responses - they bias the model to give up
+                if msg.get("role") == "assistant" and any(phrase in content.lower() for phrase in [
+                    "keine informationen gefunden",
+                    "leider habe ich dazu keine",
+                    "keine passenden ergebnisse",
+                    "konnte ich nicht finden",
+                    "keine daten gefunden",
+                ]):
+                    self._log(f"Filtering out failure response from history")
+                    continue
+                filtered_history.append(msg)
+
+            for msg in filtered_history:
                 messages.append({
                     "role": msg.get("role", "user"),
                     "content": msg.get("content", "")
