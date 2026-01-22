@@ -75,7 +75,12 @@ _STRUCTURED_RE = re.compile(
     r"grabtiefe|reichweite|tragkraft|hubhoehe|hubhöhe|"
     r"arbeitsbreite|einbaubreite|motorleistung|gewicht|"
     r"fahrgeschwindigkeit|nutzlast|breite|tiefe|hoehe|höhe|"
-    r"leistung|schwer|meter|mm|kg|kw)\b|"
+    r"leistung|schwer|meter|mm|kg|kw|"
+    # Task/recommendation patterns - these require SQL lookup
+    r"strasse|strassenbau|asphalt|asphaltieren|"
+    r"bauen|bau|erstellen|anlegen|"
+    r"empfehl|empfehlung|brauche|brauch|benotige|benötige|"
+    r"welche.*fuer|welche.*für|was.*fuer|was.*für)\b|"
     # Compound words with measurement suffixes (durchfahrtsbreite, transportbreite, etc.)
     r"\w+breite\b|\w+tiefe\b|\w+hoehe\b|\w+höhe\b|\w+gewicht\b"
 )

@@ -889,15 +889,15 @@ Bei "Kette oder Mobil?" Fragen:
         # Store reduced schema for validation
         self._current_reduced_schema = reduced_schema
 
-        # Inject learned rules from user feedback at the start of system prompt
-        try:
-            from .learned_rules import learned_rules_service
-            rules_section = learned_rules_service.build_rules_prompt_section()
-            if rules_section:
-                system_prompt = rules_section + system_prompt
-                self._log(f"Injected {len(learned_rules_service.get_all_active_rules())} learned rules into prompt")
-        except Exception as e:
-            self._log(f"Failed to inject learned rules (non-critical): {e}")
+        # Learned rules injection disabled for testing
+        # try:
+        #     from .learned_rules import learned_rules_service
+        #     rules_section = learned_rules_service.build_rules_prompt_section()
+        #     if rules_section:
+        #         system_prompt = rules_section + system_prompt
+        #         self._log(f"Injected {len(learned_rules_service.get_all_active_rules())} learned rules into prompt")
+        # except Exception as e:
+        #     self._log(f"Failed to inject learned rules (non-critical): {e}")
 
         messages = [{"role": "system", "content": system_prompt}]
 
