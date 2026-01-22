@@ -71,15 +71,22 @@ TOOLS:
 - search_documents: Dokumentensuche (Handbücher, Anleitungen)
 - explore_column: Spalten erkunden - nutze dies BEVOR du unsichere Spalten abfragst
 
-TOOL-NUTZUNG (KRITISCH - IMMER BEFOLGEN):
-Du MUSST execute_sql aufrufen bei JEDER Frage zu:
-- Maschinen, Geräten, Equipment
-- Bauaufgaben (Straße bauen, graben, heben, etc.)
-- Empfehlungen ("was brauche ich", "was empfiehlst du")
-- Verfügbarkeit, Anzahl, Listen
+TOOL-NUTZUNG (ABSOLUT KRITISCH - KEINE AUSNAHMEN):
+Du MUSST execute_sql IMMER aufrufen bei Fragen zu:
+- Maschinen, Geräten, Equipment, Baumaschinen
+- Bauaufgaben (Straße bauen, graben, heben, asphaltieren, etc.)
+- Empfehlungen ("was brauche ich", "was empfiehlst du", "welche Maschine")
+- Verfügbarkeit, Anzahl, Listen, Mietgeräte
 
-NIEMALS "keine Informationen gefunden" sagen OHNE vorher execute_sql aufgerufen zu haben!
-Wenn der Nutzer eine Aufgabe beschreibt → überlege welche Maschinenart passt → SUCHE in der DB.
+ABSOLUTES VERBOT:
+- NIEMALS "keine Informationen gefunden" sagen OHNE execute_sql aufgerufen zu haben!
+- NIEMALS auf Basis von Konversationshistorie antworten ohne execute_sql!
+- NIEMALS annehmen dass eine Suche fehlschlagen wird - IMMER versuchen!
+
+Wenn der Nutzer eine Bauaufgabe beschreibt (z.B. "Straße bauen"):
+1. Erkenne die passende Maschinenart (z.B. Fertiger für Straßenbau)
+2. RUFE execute_sql AUF um passende Maschinen zu finden
+3. Zeige die gefundenen Ergebnisse
 
 DETAILGRAD (WICHTIG):
 - Bei "was brauche ich / was empfehlst du / Straße bauen / Aufgabe X": antworte STANDARDMÄSSIG detailliert.
@@ -923,14 +930,19 @@ Bei "Kette oder Mobil?" Fragen:
             if plan_section:
                 messages.append({"role": "system", "content": plan_section})
 
-        # Add conversation history if provided (filter out failure responses that could bias the model)
+        # Add conversation history if provided (filter out problematic messages that could bias the model)
         if conversation_history:
             max_messages = max(2, int(config.conversation_max_messages))
             filtered_history = []
+            seen_user_queries = set()
+            current_query_lower = user_query.lower().strip()[:50]  # First 50 chars for comparison
+
             for msg in conversation_history[-max_messages:]:
                 content = msg.get("content", "")
+                role = msg.get("role", "user")
+
                 # Skip assistant messages that are just failure responses - they bias the model to give up
-                if msg.get("role") == "assistant" and any(phrase in content.lower() for phrase in [
+                if role == "assistant" and any(phrase in content.lower() for phrase in [
                     "keine informationen gefunden",
                     "leider habe ich dazu keine",
                     "keine passenden ergebnisse",
@@ -939,6 +951,20 @@ Bei "Kette oder Mobil?" Fragen:
                 ]):
                     self._log(f"Filtering out failure response from history")
                     continue
+
+                # Skip duplicate/similar user queries - model learns bad patterns from repeated failures
+                if role == "user":
+                    content_lower = content.lower().strip()[:50]
+                    # Skip if too similar to current query (already asked this)
+                    if content_lower == current_query_lower:
+                        self._log(f"Filtering out duplicate user query from history")
+                        continue
+                    # Skip if we've already seen this query in history
+                    if content_lower in seen_user_queries:
+                        self._log(f"Filtering out repeated user query from history")
+                        continue
+                    seen_user_queries.add(content_lower)
+
                 filtered_history.append(msg)
 
             for msg in filtered_history:

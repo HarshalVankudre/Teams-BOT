@@ -14,9 +14,18 @@ from ..config import config
 class OpenAIProvider(LLMProvider):
     """OpenAI provider using AsyncOpenAI client."""
 
-    def __init__(self):
+    def __init__(
+        self,
+        model_override: str = None,
+        reasoning_override: str = None,
+        temperature_override: float = None,
+        max_tokens_override: int = None
+    ):
         self._client = AsyncOpenAI(api_key=config.openai_api_key)
-        self._model = config.openai_model
+        self._model = model_override or config.openai_model
+        self._reasoning = reasoning_override if reasoning_override is not None else config.openai_reasoning
+        self._temperature = temperature_override
+        self._max_tokens = max_tokens_override
         print(f"[OpenAIProvider] Initialized with model: {self._model}")
 
     @property
@@ -43,12 +52,16 @@ class OpenAIProvider(LLMProvider):
         params = {
             "model": self._model,
             "messages": openai_messages,
-            "max_completion_tokens": max_tokens,
+            "max_completion_tokens": self._max_tokens or max_tokens,
         }
 
         # Apply reasoning effort if configured (for o1/o3/gpt-5 models)
-        if config.openai_reasoning and config.openai_reasoning.lower() != "none":
-            params["reasoning_effort"] = config.openai_reasoning.lower()
+        if self._reasoning and self._reasoning.lower() != "none":
+            params["reasoning_effort"] = self._reasoning.lower()
+
+        # Apply temperature if configured
+        if self._temperature is not None:
+            params["temperature"] = self._temperature
 
         if tools:
             params["tools"] = tools

@@ -48,11 +48,10 @@ class ConversationContext:
         """Convert context to a prompt section for injection."""
         lines = ["CONVERSATION CONTEXT (use this information):"]
 
-        if self.is_followup:
-            lines.append(f"- This is a FOLLOW-UP query (type: {self.followup_type})")
-            if self.last_result_ids:
-                lines.append(f"- Previous results: {len(self.last_result_ids)} items")
-                lines.append(f"- Result IDs for 'davon/diese' queries: {self.last_result_ids[:25]}")
+        # Always include last_result_ids if available - let the LLM decide when to use them
+        if self.last_result_ids:
+            lines.append(f"- Previous query returned {len(self.last_result_ids)} results")
+            lines.append(f"- Previous result IDs (use with WHERE id IN (...) for follow-ups): {self.last_result_ids[:25]}")
 
         if self.last_sql_purpose:
             lines.append(f"- Last query was about: {self.last_sql_purpose}")
@@ -77,25 +76,11 @@ class ConversationContext:
                 lines.append(f"  {i}. {name}")
 
         lines.append("")
-        lines.append("FOLLOW-UP RULES:")
-        lines.append("- 'davon/diese/welche davon' = filter the previous result set")
-        lines.append("- 'zeige mehr/details' = expand on previous results")
-        lines.append("- Preserve active filters unless user explicitly changes them")
-
-        # Add specific guidance for comparison/recommendation follow-ups
-        if self.followup_type == "compare":
-            lines.append("")
-            lines.append("COMPARISON/RECOMMENDATION REQUEST DETECTED:")
-            lines.append("- User wants comparison or recommendation based on previous results")
-            lines.append("- You MUST use execute_sql to get data for comparison")
-            lines.append("- Compare the relevant attributes (e.g., Kette vs Mobil, manufacturers, specs)")
-            lines.append("- Use the previous query context to build your comparison query")
-        elif self.followup_type == "continuation":
-            lines.append("")
-            lines.append("CONTINUATION REQUEST DETECTED:")
-            lines.append("- User wants to continue with previous results")
-            lines.append("- Reference previous result IDs if available")
-            lines.append("- Apply new criteria to the previous result set")
+        lines.append("FOLLOW-UP GUIDANCE (DECIDE DYNAMICALLY):")
+        lines.append("- Analyze the current query in context of this conversation.")
+        lines.append("- If the query refines, filters, or builds on previous results: use WHERE id IN (<previous_ids>) AND <new_condition>.")
+        lines.append("- Preserve active filters unless user explicitly changes them.")
+        lines.append("- When uncertain if it's a follow-up: prefer using previous IDs to maintain continuity.")
 
         return "\n".join(lines)
 

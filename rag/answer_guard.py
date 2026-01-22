@@ -23,6 +23,17 @@ _HELP_QUESTION_RE = re.compile(
     r"kannst\s+du|was\s+kannst|wozu|wofur|warum)\b"
 )
 
+# Patterns indicating "no info found" responses
+_NO_INFO_RE = re.compile(
+    r"\b(keine\s+informationen|nicht\s+gefunden|nichts\s+gefunden|"
+    r"keine\s+daten|keine\s+ergebnisse|leider\s+nicht|"
+    r"konnte\s+nicht\s+finden|habe\s+keine|finde\s+keine)\b",
+    re.IGNORECASE
+)
+
+# Patterns that could have space variants (model numbers, codes)
+_SPACE_VARIANT_RE = re.compile(r"\b[a-zA-Z]{1,4}\s*\d{2,5}\b")
+
 
 def _normalize_text(text: str) -> str:
     if not text:
@@ -125,6 +136,14 @@ class AnswerGuard:
                 issues=issues,
             )
 
+        # Check for "no info" response when search variants could help
+        if self._is_no_info_without_retry(response or "", context):
+            issues.append("no_info_without_retry")
+            return GuardedResponse(
+                response=self._get_search_variant_suggestion(context),
+                issues=issues,
+            )
+
         trimmed = self._trim_response(response or "")
         if trimmed != (response or ""):
             issues.append("trimmed")
@@ -170,6 +189,73 @@ class AnswerGuard:
 
     def _is_help_question(self, normalized_query: str) -> bool:
         return bool(_HELP_QUESTION_RE.search(normalized_query))
+
+    def _is_no_info_without_retry(self, response: str, context: AnswerContext) -> bool:
+        """
+        Detect when LLM says 'no info' for equipment queries that could have search variants.
+
+        This catches cases where:
+        1. Intent required/preferred SQL (equipment query)
+        2. SQL was executed but returned 0 results
+        3. Response says "keine Informationen" or similar
+        4. Query contains model numbers that could have space variants (e.g., bw174 vs bw 174)
+        """
+        # Only check if intent required/preferred SQL
+        intent = context.intent
+        if not intent:
+            return False
+        requires_sql = getattr(intent, "requires_sql", False)
+        prefers_sql = getattr(intent, "prefers_sql", False)
+        if not (requires_sql or prefers_sql):
+            return False
+
+        # Only if SQL was called but returned 0 results
+        if "execute_sql" not in (context.tools_used or []):
+            return False
+        if context.sql_results_count > 0:
+            return False
+
+        # Check if response indicates "no info found"
+        if not _NO_INFO_RE.search(response or ""):
+            return False
+
+        # Check if query has model numbers that could have space variants
+        query = context.query or ""
+        if _SPACE_VARIANT_RE.search(query):
+            return True
+
+        return False
+
+    def _get_search_variant_suggestion(self, context: AnswerContext) -> str:
+        """Generate suggestion for search variants based on query."""
+        query = context.query or ""
+
+        # Find model number patterns and suggest variants
+        matches = _SPACE_VARIANT_RE.findall(query)
+        if matches:
+            term = matches[0]
+            # Check if it has space or not
+            if " " in term:
+                no_space = term.replace(" ", "")
+                return (
+                    f"Keine Treffer für '{term}'. Probieren Sie auch die Schreibweise "
+                    f"ohne Leerzeichen: '{no_space}'. Oder beschreiben Sie die gesuchte "
+                    f"Maschine (z.B. Hersteller, Typ, Einsatzgebiet)."
+                )
+            else:
+                # Insert space between letters and numbers
+                with_space = re.sub(r"([a-zA-Z])(\d)", r"\1 \2", term)
+                return (
+                    f"Keine Treffer für '{term}'. Probieren Sie auch die Schreibweise "
+                    f"mit Leerzeichen: '{with_space}'. Oder beschreiben Sie die gesuchte "
+                    f"Maschine (z.B. Hersteller, Typ, Einsatzgebiet)."
+                )
+
+        return (
+            "Keine passenden Maschinen gefunden. Versuchen Sie andere Suchbegriffe "
+            "(z.B. Hersteller, Maschinentyp, Seriennummer) oder beschreiben Sie "
+            "die gewünschte Funktion."
+        )
 
     def _trim_response(self, response: str) -> str:
         text = (response or "").strip()

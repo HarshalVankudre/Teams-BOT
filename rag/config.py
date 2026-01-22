@@ -79,6 +79,9 @@ class RAGConfig:
     agent_planning_model: str = os.getenv("AGENT_PLANNING_MODEL", "")  # Empty = use main model
     agent_verification_model: str = os.getenv("AGENT_VERIFICATION_MODEL", "")  # Empty = use main model
 
+    # Prompt optimization
+    agent_compact_prompt: bool = os.getenv("AGENT_COMPACT_PROMPT", "true").lower() == "true"  # Reduce prompt size
+
     # Conversation Settings
     conversation_ttl_hours: int = int(os.getenv("CONVERSATION_TTL_HOURS", "72"))
     conversation_max_messages: int = int(os.getenv("CONVERSATION_MAX_MESSAGES", "40"))

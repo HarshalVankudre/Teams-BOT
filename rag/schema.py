@@ -87,6 +87,10 @@ Filter by manufacturer:
 Search by serial/inventory:
   SELECT id, bezeichnung FROM {EQUIPMENT_TABLE_FQN}
   WHERE seriennummer ILIKE '%search%' OR inventarnummer ILIKE '%search%' LIMIT 10;
+
+Search by model/name (bezeichnung):
+  SELECT id, bezeichnung, hersteller_name FROM {EQUIPMENT_TABLE_FQN}
+  WHERE bezeichnung ILIKE '%search_term%' LIMIT 10;
 """
 
 # Alias for backward compatibility
