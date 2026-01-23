@@ -30,6 +30,10 @@ if "%1"=="/schema" goto schema
 if "%1"=="/batch" goto batch
 if "%1"=="/b" goto batch
 if "%1"=="/export" goto export
+if "%1"=="/langgraph" goto langgraph
+if "%1"=="/lg" goto langgraph
+if "%1"=="/fallback" goto fallback
+if "%1"=="/validate" goto validate
 
 :: Plain text = query
 goto query
@@ -90,6 +94,47 @@ echo %GREEN%Exporting results...%RESET%
 python cli_tester.py -o test_results.json
 goto end
 
+:langgraph
+echo.
+echo %BOLD%%CYAN%============================================================%RESET%
+echo %BOLD%  LangGraph Agent Test%RESET%
+echo %CYAN%============================================================%RESET%
+echo.
+echo %YELLOW%Testing LangGraph agent with sample query...%RESET%
+echo.
+set "USE_LANGGRAPH_AGENT=true"
+if "%2"=="" (
+    python cli_tester.py "Wie viele Kettenfertiger haben wir?"
+) else (
+    python cli_tester.py "%~2"
+)
+goto end
+
+:fallback
+echo.
+echo %BOLD%%YELLOW%============================================================%RESET%
+echo %BOLD%  Fallback Agent Test (LangGraph Disabled)%RESET%
+echo %YELLOW%============================================================%RESET%
+echo.
+echo %YELLOW%Testing with LangGraph DISABLED...%RESET%
+echo.
+set "USE_LANGGRAPH_AGENT=false"
+if "%2"=="" (
+    python cli_tester.py "Wie viele Kettenfertiger haben wir?"
+) else (
+    python cli_tester.py "%~2"
+)
+goto end
+
+:validate
+echo.
+echo %BOLD%%GREEN%============================================================%RESET%
+echo %BOLD%  LangGraph Migration Validation%RESET%
+echo %GREEN%============================================================%RESET%
+echo.
+python -c "print('=== Import Validation ==='); from rag.langgraph_agent import LangGraphAgent, execute_sql, search_documents, find_columns, explore_column, SYSTEM_PROMPT; print('[OK] All LangGraph imports successful'); from rag.search import RAGSearch; print('[OK] RAGSearch import successful'); from rag.config import config; print(f'[OK] USE_LANGGRAPH_AGENT={config.use_langgraph_agent}'); print(); print('=== Tool Validation ==='); tools = [execute_sql, search_documents, find_columns, explore_column]; [print(f'[OK] {t.name}: invoke={hasattr(t,\"invoke\")}, ainvoke={hasattr(t,\"ainvoke\")}') for t in tools]; print(); print('=== All Validations Passed ===')"
+goto end
+
 :help
 echo.
 echo %BOLD%%CYAN%============================================================%RESET%
@@ -108,10 +153,17 @@ echo   %GREEN%/schema%RESET%         Schema information
 echo   %GREEN%/batch%RESET%          Run batch tests
 echo   %GREEN%/export%RESET%         Export results to JSON
 echo.
+echo %BOLD%LangGraph Commands:%RESET%
+echo   %GREEN%/langgraph%RESET%      Test with LangGraph agent (or /lg)
+echo   %GREEN%/fallback%RESET%       Test with LangGraph disabled
+echo   %GREEN%/validate%RESET%       Validate LangGraph migration
+echo.
 echo %BOLD%Examples:%RESET%
 echo   %YELLOW%test Wie viele Bomag Maschinen haben wir?%RESET%
-echo   %YELLOW%test /sql "SELECT COUNT(*) FROM public.equipment_matrix"%RESET%
+echo   %YELLOW%test /sql "SELECT COUNT(*) FROM sema_matrix.equipment_matrix"%RESET%
 echo   %YELLOW%test /search "Anleitung Kaltfraese"%RESET%
+echo   %YELLOW%test /lg "Zeige alle Voegele Kettenfertiger"%RESET%
+echo   %YELLOW%test /validate%RESET%
 echo.
 goto end
 
