@@ -83,6 +83,16 @@ class RAGSearch:
         else:
             print("[RAG] Single Agent: Disabled (using direct search)")
 
+        # LangGraph agent (new)
+        self.langgraph_agent = None
+        if config.use_langgraph_agent:
+            try:
+                from rag.langgraph_agent import get_langgraph_agent
+                self.langgraph_agent = get_langgraph_agent()
+                print("[RAG] LangGraph Agent: Enabled")
+            except Exception as e:
+                print(f"[RAG] LangGraph Agent initialization failed: {e}")
+
     async def _get_conversation_history(self, thread_key: str) -> List[Dict]:
         """Get full conversation history from Redis for context."""
         if not self.redis_client or not thread_key:
@@ -151,7 +161,43 @@ class RAGSearch:
         top_k = top_k or config.search_top_k
         start_time = time.time()
 
-        # PRIMARY: Use Single Agent
+        # Priority 1: LangGraph agent
+        if self.langgraph_agent and config.use_langgraph_agent:
+            try:
+                # Get conversation history for context
+                conversation_history = await self._get_conversation_history(thread_key)
+
+                if conversation_history:
+                    print(f"[RAG] LangGraph using {len(conversation_history)} messages from history")
+
+                result = await self.langgraph_agent.process(
+                    user_query=query,
+                    thread_key=thread_key,
+                    conversation_history=conversation_history
+                )
+
+                print(f"[RAG] LangGraph response in {result.execution_time_ms}ms")
+                print(f"[RAG] Tools used: {result.tools_used}")
+
+                # Store this turn in history
+                await self._store_conversation_turn(thread_key, query, result.response)
+
+                return {
+                    "response": result.response,
+                    "sources": result.sources or [],
+                    "chunks_used": len(result.sources) if result.sources else getattr(result, 'sql_results_count', 0),
+                    "response_id": None,
+                    "web_results_used": 0,
+                    "query_type": "langgraph_agent",
+                    "agents_used": result.tools_used,
+                    "execution_time_ms": result.execution_time_ms,
+                    "agent": "langgraph"
+                }
+            except Exception as e:
+                print(f"[RAG] LangGraph agent error: {e}, falling back to SingleAgent")
+                # Fall through to single agent
+
+        # Priority 2: Use Single Agent (legacy)
         if self.use_single_agent and self.agent:
             try:
                 # Get conversation history for context
