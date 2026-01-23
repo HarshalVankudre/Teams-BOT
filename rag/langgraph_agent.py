@@ -1,5 +1,6 @@
 """LangGraph ReAct agent for RÜKO equipment queries."""
 
+import re
 import time
 import logging
 from typing import List, Optional
@@ -170,8 +171,8 @@ def explore_column(column_name: str) -> dict:
     """
     postgres = _get_postgres()
 
-    # Validate column name (prevent injection)
-    if not column_name.replace("_", "").replace("prop", "").replace("e", "").isalnum():
+    # Validate column name format (PostgreSQL identifier)
+    if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', column_name):
         return {"error": f"Invalid column name: {column_name}"}
 
     sql = f"""
