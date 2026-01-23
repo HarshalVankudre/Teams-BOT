@@ -64,8 +64,12 @@ class RAGConfig:
     max_chunk_tokens: int = int(os.getenv("MAX_CHUNK_TOKENS", "500"))
     min_chunk_tokens: int = int(os.getenv("MIN_CHUNK_TOKENS", "50"))
 
+    # Redis connection for LangGraph checkpointing
+    redis_url: str = os.getenv("REDIS_URL", "redis://localhost:6379")
+
     # Agent System Settings
     use_agent_system: bool = os.getenv("USE_AGENT_SYSTEM", "true").lower() == "true"
+    use_langgraph_agent: bool = os.getenv("USE_LANGGRAPH_AGENT", "true").lower() == "true"
     agent_parallel_execution: bool = os.getenv("AGENT_PARALLEL_EXECUTION", "true").lower() == "true"
     agent_verbose: bool = os.getenv("AGENT_VERBOSE", "false").lower() == "true"
     agent_prefetch_documents: bool = os.getenv("AGENT_PREFETCH_DOCUMENTS", "true").lower() == "true"
