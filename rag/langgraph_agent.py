@@ -195,3 +195,185 @@ def explore_column(column_name: str) -> dict:
     except Exception as e:
         logger.error(f"Column exploration error: {e}")
         return {"error": str(e), "column": column_name}
+
+
+# System prompt for the ReAct agent
+SYSTEM_PROMPT = """Du bist der RÜKO Baumaschinen-Assistent.
+
+DATENBANK-INFORMATIONEN:
+- Tabelle: sema_matrix.equipment_matrix (~2400 Maschinen)
+- Kategorien (geraetegruppe_name): Kettenfertiger, Radfertiger, Kettenbagger, Mobilbagger, Radlader, etc.
+- Hersteller (hersteller_name): Voegele, Bomag, Caterpillar, Liebherr, etc.
+- verwendung_code: 'MIET' (Vermietung), 'VK' (Verkauf)
+- Zahlenformat: Komma als Dezimaltrennzeichen (z.B. "3,5" = 3.5)
+- Für numerische Vergleiche: CAST(NULLIF(REPLACE(regexp_replace(col, '[^0-9,]', '', 'g'), ',', '.'), '') AS NUMERIC)
+
+WERKZEUGE:
+1. execute_sql - SQL-Abfragen für Bestandsdaten
+2. search_documents - Technische Dokumentation durchsuchen
+3. find_columns - Spalten für Eigenschaften finden (Breite, Gewicht, etc.)
+4. explore_column - Mögliche Werte einer Spalte anzeigen
+
+WICHTIGE REGELN:
+- Antworte IMMER auf Deutsch
+- Nutze find_columns ZUERST wenn du unsicher über Spaltennamen bist
+- Bei "davon", "diese", "welche" - beziehe dich auf vorherige Ergebnisse
+- Halte Antworten kurz und präzise
+- Liste Maschinen mit: Bezeichnung, Hersteller, relevante Eigenschaften
+"""
+
+
+@dataclass
+class AgentResult:
+    """Result from LangGraph agent processing."""
+    response: str
+    tools_used: List[str]
+    execution_time_ms: int
+    token_usage: Optional[dict] = None
+    sources: Optional[List[str]] = None
+
+
+class LangGraphAgent:
+    """LangGraph ReAct agent for equipment queries."""
+
+    def __init__(self, redis_url: Optional[str] = None):
+        """Initialize the LangGraph agent.
+
+        Args:
+            redis_url: Redis connection URL for checkpointing.
+                      If None, uses in-memory checkpointer.
+        """
+        from langgraph.prebuilt import create_react_agent
+        from langchain_openai import ChatOpenAI
+
+        # Initialize LLM
+        self.llm = ChatOpenAI(
+            model=config.openai_model,
+            temperature=0,
+            api_key=config.openai_api_key
+        )
+
+        # Collect tools
+        self.tools = [execute_sql, search_documents, find_columns, explore_column]
+
+        # Add web search if enabled
+        if hasattr(config, 'enable_web_search') and config.enable_web_search:
+            try:
+                from langchain_community.tools.tavily_search import TavilySearchResults
+                web_search = TavilySearchResults(
+                    max_results=5,
+                    description="Search the web for current information about equipment, manufacturers, or recommendations."
+                )
+                self.tools.append(web_search)
+            except Exception as e:
+                logger.warning(f"Web search not available: {e}")
+
+        # Set up checkpointer
+        self.checkpointer = None
+        if redis_url:
+            try:
+                from langgraph.checkpoint.redis import RedisSaver
+                self.checkpointer = RedisSaver.from_conn_string(redis_url)
+                logger.info("Using Redis checkpointer for LangGraph")
+            except Exception as e:
+                logger.warning(f"Redis checkpointer failed, using memory: {e}")
+
+        if self.checkpointer is None:
+            from langgraph.checkpoint.memory import MemorySaver
+            self.checkpointer = MemorySaver()
+            logger.info("Using in-memory checkpointer for LangGraph")
+
+        # Create ReAct agent
+        self.graph = create_react_agent(
+            model=self.llm,
+            tools=self.tools,
+            checkpointer=self.checkpointer,
+            state_modifier=SYSTEM_PROMPT
+        )
+
+        logger.info(f"LangGraph agent initialized with {len(self.tools)} tools")
+
+    async def process(
+        self,
+        user_query: str,
+        thread_key: str,
+        conversation_history: Optional[List[dict]] = None
+    ) -> AgentResult:
+        """Process a user query through the ReAct agent.
+
+        Args:
+            user_query: The user's question in German
+            thread_key: Unique thread identifier for state persistence
+            conversation_history: Optional prior messages (used if no checkpoint exists)
+
+        Returns:
+            AgentResult with response and metadata
+        """
+        start_time = time.time()
+
+        # Build messages
+        messages = []
+
+        # Add conversation history if provided
+        if conversation_history:
+            for msg in conversation_history[-6:]:  # Last 3 exchanges
+                role = msg.get("role", "user")
+                content = msg.get("content", "")
+                if role in ("user", "assistant") and content:
+                    messages.append((role, content))
+
+        # Add current query
+        messages.append(("user", user_query))
+
+        # Configure with thread_id for checkpointing
+        run_config = {"configurable": {"thread_id": thread_key}}
+
+        try:
+            # Invoke the graph
+            result = await self.graph.ainvoke(
+                {"messages": messages},
+                config=run_config
+            )
+
+            # Extract response from last message
+            final_message = result["messages"][-1]
+            response = final_message.content if hasattr(final_message, "content") else str(final_message)
+
+            # Extract tools used
+            tools_used = self._extract_tools_used(result["messages"])
+
+            execution_time = int((time.time() - start_time) * 1000)
+
+            return AgentResult(
+                response=response,
+                tools_used=tools_used,
+                execution_time_ms=execution_time
+            )
+
+        except Exception as e:
+            logger.error(f"LangGraph agent error: {e}", exc_info=True)
+            raise
+
+    def _extract_tools_used(self, messages: list) -> List[str]:
+        """Extract unique tool names from message history."""
+        tools = []
+        for msg in messages:
+            if hasattr(msg, "tool_calls") and msg.tool_calls:
+                for tc in msg.tool_calls:
+                    name = tc.get("name") if isinstance(tc, dict) else getattr(tc, "name", None)
+                    if name and name not in tools:
+                        tools.append(name)
+        return tools
+
+
+# Singleton instance
+_agent_instance: Optional[LangGraphAgent] = None
+
+
+def get_langgraph_agent() -> LangGraphAgent:
+    """Get or create the singleton LangGraph agent instance."""
+    global _agent_instance
+    if _agent_instance is None:
+        redis_url = config.redis_url if hasattr(config, "redis_url") else None
+        _agent_instance = LangGraphAgent(redis_url=redis_url)
+    return _agent_instance
