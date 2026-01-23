@@ -3,12 +3,17 @@
 import re
 import time
 import logging
+import asyncio
 from typing import List, Optional
 from dataclasses import dataclass
 
 from langchain_core.tools import tool
 
 from rag.config import config
+
+# Verbose logging flag from config
+VERBOSE = config.agent_verbose if hasattr(config, "agent_verbose") else False
+
 from rag.postgres import PostgresService
 from rag.vector_store import PineconeStore
 from rag.schema_linker import SchemaLinker
@@ -311,6 +316,9 @@ class LangGraphAgent:
         """
         start_time = time.time()
 
+        if VERBOSE:
+            logger.info(f"LangGraph processing query: {user_query[:100]}...")
+
         # Build messages
         messages = []
 
@@ -329,11 +337,22 @@ class LangGraphAgent:
         run_config = {"configurable": {"thread_id": thread_key}}
 
         try:
-            # Invoke the graph
-            result = await self.graph.ainvoke(
-                {"messages": messages},
-                config=run_config
-            )
+            # Invoke the graph with rate limit retry
+            try:
+                result = await self.graph.ainvoke(
+                    {"messages": messages},
+                    config=run_config
+                )
+            except Exception as e:
+                if "rate_limit" in str(e).lower() or "429" in str(e):
+                    logger.warning("Rate limited, waiting 5s before retry...")
+                    await asyncio.sleep(5)
+                    result = await self.graph.ainvoke(
+                        {"messages": messages},
+                        config=run_config
+                    )
+                else:
+                    raise
 
             # Extract response from last message
             final_message = result["messages"][-1]
