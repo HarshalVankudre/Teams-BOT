@@ -2,6 +2,7 @@
 Pinecone Vector Store Integration
 Uses the Pinecone cloud database for vector storage and retrieval
 """
+import time
 from typing import List, Dict, Any, Optional
 import pinecone
 from .config import config
@@ -88,10 +89,14 @@ class PineconeStore:
         Returns:
             List of matching chunks with scores
         """
+        search_start = time.time()
         top_k = top_k or config.search_top_k
 
         # Generate query embedding
+        embed_start = time.time()
         query_embedding = await self.embedding_service.embed_query(query)
+        embed_ms = (time.time() - embed_start) * 1000
+        print(f"⏱️  [pinecone:embedding] {embed_ms:.0f}ms")
 
         # Build filter if provided
         pinecone_filter = self._build_filter(filters) if filters else None
@@ -108,6 +113,7 @@ class PineconeStore:
         # Search each namespace
         for ns in namespaces_to_search:
             try:
+                query_start = time.time()
                 results = self.index.query(
                     vector=query_embedding,
                     top_k=top_k,
@@ -115,6 +121,8 @@ class PineconeStore:
                     include_metadata=include_metadata,
                     filter=pinecone_filter
                 )
+                query_ms = (time.time() - query_start) * 1000
+                print(f"⏱️  [pinecone:query:{ns}] {query_ms:.0f}ms ({len(results.matches)} matches)")
 
                 # Format results from this namespace
                 for match in results.matches:
@@ -141,6 +149,10 @@ class PineconeStore:
 
         # Sort by score descending and limit to top_k
         all_results.sort(key=lambda x: x.get("score", 0), reverse=True)
+
+        total_ms = (time.time() - search_start) * 1000
+        print(f"⏱️  [pinecone:search:total] {total_ms:.0f}ms (embed={embed_ms:.0f}ms)")
+
         return all_results[:top_k]
 
     async def search_by_category(

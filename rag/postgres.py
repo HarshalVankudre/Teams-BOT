@@ -4,6 +4,7 @@ Handles structured queries to the SEMA Matrix equipment database (sema_matrix).
 """
 import os
 import re
+import time
 from typing import List, Dict, Any, Optional, Sequence, Mapping, Union, Tuple
 from dataclasses import dataclass
 
@@ -276,12 +277,26 @@ class PostgresService:
                 raise RuntimeError(self.availability_error or "PostgreSQL unavailable")
             return []
 
+        query_start = time.time()
+
+        conn_start = time.time()
         conn = self._get_connection()
+        conn_ms = (time.time() - conn_start) * 1000
+
         cursor = conn.cursor(cursor_factory=RealDictCursor)
 
         try:
+            exec_start = time.time()
             cursor.execute(sql, params)
+            exec_ms = (time.time() - exec_start) * 1000
+
+            fetch_start = time.time()
             results = [self._convert_row(dict(row)) for row in cursor.fetchall()]
+            fetch_ms = (time.time() - fetch_start) * 1000
+
+            total_ms = (time.time() - query_start) * 1000
+            print(f"⏱️  [postgres:query] {total_ms:.0f}ms (conn={conn_ms:.0f}ms, exec={exec_ms:.0f}ms, fetch={fetch_ms:.0f}ms, rows={len(results)})")
+
             return results
         except Exception as e:
             print(f"[PostgreSQL] Query error: {e}")

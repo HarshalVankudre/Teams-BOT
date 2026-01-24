@@ -125,8 +125,12 @@ class RAGSearch:
             return []
         try:
             import json
+            redis_start = time.time()
             history_key = f"chat_history:{thread_key}"
             history_json = await self.redis_client.get(history_key)
+            redis_ms = (time.time() - redis_start) * 1000
+            print(f"⏱️  [redis:get_history] {redis_ms:.0f}ms")
+
             if history_json:
                 history = json.loads(history_json)
                 max_messages = max(2, int(config.conversation_max_messages))
@@ -141,19 +145,22 @@ class RAGSearch:
             return
         try:
             import json
+            redis_start = time.time()
             history_key = f"chat_history:{thread_key}"
             history = await self._get_conversation_history(thread_key)
-            
+
             # Add new turn
             history.append({"role": "user", "content": user_msg})
             history.append({"role": "assistant", "content": assistant_msg})
-            
+
             # Keep last N messages for full session context
             max_messages = max(2, int(config.conversation_max_messages))
             history = history[-max_messages:]
-            
+
             # Store with configured TTL
             await self.redis_client.setex(history_key, config.conversation_ttl_hours * 3600, json.dumps(history))
+            redis_ms = (time.time() - redis_start) * 1000
+            print(f"⏱️  [redis:store_history] {redis_ms:.0f}ms")
         except Exception as e:
             print(f"[RAG] Error storing history: {e}")
 
