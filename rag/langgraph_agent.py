@@ -4,7 +4,7 @@ import re
 import time
 import logging
 import asyncio
-from typing import List, Optional
+from typing import List, Optional, Union
 from dataclasses import dataclass
 
 from langchain_core.tools import tool
@@ -121,12 +121,12 @@ def query_equipment(
     manufacturer: str = None,
     property_column: str = None,
     property_operator: str = None,
-    property_value: str = None,
+    property_value: Union[str, int, float, None] = None,
     property_column_2: str = None,
     property_operator_2: str = None,
-    property_value_2: str = None,
+    property_value_2: Union[str, int, float, None] = None,
     usage_type: str = None,
-    limit: int = 20
+    limit: int = 10
 ) -> dict:
     """Query equipment with filters.
     
@@ -140,7 +140,7 @@ def query_equipment(
         property_operator_2: Second operator (optional)
         property_value_2: Second value (optional)
         usage_type: 'MIET' (rental) or 'VK' (sale)
-        limit: Max results (default 20, max 50)
+        limit: Max results (default 10, max 20)
     
     Returns:
         Dict with matching equipment.
@@ -194,7 +194,7 @@ def query_equipment(
     add_filter(property_column_2, property_operator_2, property_value_2)
     
     # Build query
-    limit = min(limit, 50)
+    limit = min(limit, 20)  # Cap at 20 to save tokens
     where_sql = " AND ".join(where_clauses) if where_clauses else "TRUE"
     
     sql = f"""
@@ -226,13 +226,13 @@ def lookup_equipment(search_term: str, include_fields: str = "all") -> dict:
                      (e.g., "Super 800i", "R 926", "Liebherr A 914")
         include_fields: Which fields to return:
                        - "basic": id, bezeichnung, hersteller_name, seriennummer
-                       - "all": all core fields including inventarnummer, verwendung, etc.
+                       - "all": all core fields + all properties via JSON
     
     Returns:
-        Dict with matching equipment details including serial numbers.
+        Dict with matching equipment details including serial numbers and ALL properties.
     
     Example:
-        lookup_equipment("Super 800i") → Returns all Super 800i machines with serial numbers
+        lookup_equipment("Super 800i") → Returns all Super 800i machines with all properties
     """
     postgres = _get_postgres()
     
@@ -244,8 +244,10 @@ def lookup_equipment(search_term: str, include_fields: str = "all") -> dict:
     if include_fields == "basic":
         fields = "id, bezeichnung, hersteller_name, seriennummer, geraetegruppe_name"
     else:
+        # Include core fields + properties_jsonb for ALL dynamic properties
         fields = """id, bezeichnung, hersteller_name, seriennummer, inventarnummer, 
-                    geraetegruppe_name, verwendung_code, nuclos_state"""
+                    geraetegruppe_name, verwendung_code, nuclos_state,
+                    properties_jsonb"""
     
     # Build search query - search in bezeichnung, seriennummer, and inventarnummer
     sql = f"""
@@ -254,7 +256,7 @@ def lookup_equipment(search_term: str, include_fields: str = "all") -> dict:
         WHERE bezeichnung ILIKE '%{search_term}%'
            OR seriennummer ILIKE '%{search_term}%'
            OR inventarnummer ILIKE '%{search_term}%'
-        LIMIT 20
+        LIMIT 5
     """
     
     print(f"📄 SQL:\n{sql}")
@@ -264,7 +266,7 @@ def lookup_equipment(search_term: str, include_fields: str = "all") -> dict:
         
         print(f"✅ Found {len(results)} machines matching '{search_term}'")
         if results:
-            print(f"📊 First result: {results[0]}")
+            print(f"📊 First result keys: {list(results[0].keys())}")
         
         return {
             "search_term": search_term,
@@ -275,6 +277,85 @@ def lookup_equipment(search_term: str, include_fields: str = "all") -> dict:
         print(f"❌ Lookup error: {e}")
         logger.error(f"Lookup equipment error: {e}")
         return {"error": str(e), "search_term": search_term}
+
+
+@tool
+def get_equipment_details(
+    equipment_id: int = None,
+    serial_number: str = None,
+    property_filter: str = None
+) -> dict:
+    """Get detailed properties of a specific machine by ID or serial number.
+    
+    Use this after lookup_equipment to get specific property details like:
+    - Bohlentyp, Verbreiterungen, Nivelliersystem (for Fertiger)
+    - Grabtiefe, Löffelinhalt, Reichweite (for Bagger)
+    - Any other technical specifications
+    
+    Args:
+        equipment_id: The machine ID from previous lookup
+        serial_number: Or the serial number to look up
+        property_filter: Optional keyword to filter properties (e.g., 'bohle', 'verbreiterung', 'grab')
+    
+    Returns:
+        Dict with all non-null properties of the machine.
+    """
+    postgres = _get_postgres()
+    
+    if not equipment_id and not serial_number:
+        return {"error": "Provide either equipment_id or serial_number"}
+    
+    print(f"\n{'='*60}")
+    print(f"🔎 GET_EQUIPMENT_DETAILS: id={equipment_id}, serial={serial_number}, filter={property_filter}")
+    print(f"{'='*60}\n")
+    
+    # Build query
+    if equipment_id:
+        where = f"id = {equipment_id}"
+    else:
+        where = f"seriennummer = '{serial_number}'"
+    
+    sql = f"""
+        SELECT id, bezeichnung, hersteller_name, seriennummer, geraetegruppe_name,
+               verwendung_code, properties_jsonb
+        FROM {EQUIPMENT_TABLE}
+        WHERE {where}
+        LIMIT 1
+    """
+    
+    try:
+        results = postgres.execute_query(sql)
+        
+        if not results:
+            return {"error": f"No equipment found", "equipment_id": equipment_id, "serial_number": serial_number}
+        
+        machine = results[0]
+        properties = machine.get("properties_jsonb", {}) or {}
+        
+        # Filter out None/null values
+        properties = {k: v for k, v in properties.items() if v is not None and v != ""}
+        
+        # Apply keyword filter if provided
+        if property_filter:
+            filter_lower = property_filter.lower()
+            properties = {k: v for k, v in properties.items() if filter_lower in k.lower() or filter_lower in str(v).lower()}
+        
+        print(f"✅ Found {len(properties)} properties for {machine.get('bezeichnung')}")
+        
+        return {
+            "id": machine.get("id"),
+            "bezeichnung": machine.get("bezeichnung"),
+            "hersteller": machine.get("hersteller_name"),
+            "seriennummer": machine.get("seriennummer"),
+            "geraetegruppe": machine.get("geraetegruppe_name"),
+            "verwendung": machine.get("verwendung_code"),
+            "property_count": len(properties),
+            "properties": properties
+        }
+    except Exception as e:
+        print(f"❌ Details error: {e}")
+        logger.error(f"Get equipment details error: {e}")
+        return {"error": str(e)}
 
 
 @tool
@@ -471,11 +552,23 @@ WERKZEUGE:
    
 2. lookup_equipment - Spezifische Maschine nach Name/Seriennummer
 
-3. execute_sql - Direkte SQL (IMMER ILIKE für Text!)
+3. get_equipment_details - Detaillierte Eigenschaften einer Maschine
+   equipment_id oder serial_number, property_filter (optional)
+   → Für Bohlentyp, Verbreiterungen, technische Details
 
-4. search_documents - Technische Dokumentation
+4. execute_sql - Direkte SQL (IMMER ILIKE für Text!)
 
-5. explore_column - Werte einer Spalte anzeigen
+5. search_documents - Technische Dokumentation
+
+6. explore_column - Werte einer Spalte anzeigen
+
+═══════════════════════════════════════════════════════════════
+WICHTIGE SPALTEN-ZUORDNUNG:
+═══════════════════════════════════════════════════════════════
+FERTIGER Einbaubreite → einbaubreite_max_m_num (IMMER!)
+BAGGER Grabtiefe → grabtiefe_mm_num
+FRÄSE Fräsbreite → fraesbreite_mm_num
+Durchfahrtsbreite → breite_mm_num
 
 ═══════════════════════════════════════════════════════════════
 BEISPIELE:
@@ -488,6 +581,9 @@ Bagger 5m Grabtiefe:
 
 Seriennummer Super 800i:
 → lookup_equipment("Super 800i")
+
+Bohlentyp einer Maschine:
+→ get_equipment_details(serial_number="09901387", property_filter="bohle")
 
 ═══════════════════════════════════════════════════════════════
 REGELN:
@@ -520,6 +616,7 @@ class LangGraphAgent:
     def __init__(self, redis_url: Optional[str] = None):
         """Initialize the LangGraph agent."""
         from langgraph.prebuilt import create_react_agent
+        from langgraph.checkpoint.memory import MemorySaver
 
         # Initialize LLM - prefer Groq if configured, fallback to OpenAI
         if config.groq_api_key:
@@ -543,21 +640,22 @@ class LangGraphAgent:
         self.tools = [
             query_equipment,
             lookup_equipment,
+            get_equipment_details,
             execute_sql,
             search_documents,
             explore_column
         ]
 
-        # Set up checkpointer - DISABLED due to LangGraph 1.0.x compatibility issues
-        # Conversation memory will not persist between sessions, but agent will work
-        self.checkpointer = None
-        logger.info("Running without checkpointer (stateless mode)")
+        # Enable MemorySaver - preserves context including tool calls between turns
+        self.checkpointer = MemorySaver()
+        logger.info("LangGraph checkpointer enabled (MemorySaver)")
 
-        # Create ReAct agent without checkpointer
+        # Create ReAct agent with checkpointer (tool output is reduced to limit tokens)
         self.graph = create_react_agent(
             model=self.llm,
             tools=self.tools,
-            prompt=SYSTEM_PROMPT
+            prompt=SYSTEM_PROMPT,
+            checkpointer=self.checkpointer
         )
 
         logger.info(f"LangGraph agent initialized with {len(self.tools)} tools")
@@ -566,32 +664,19 @@ class LangGraphAgent:
         self,
         user_query: str,
         thread_key: str,
-        conversation_history: Optional[List[dict]] = None
+        conversation_history: Optional[List[dict]] = None  # Kept for API compat, ignored
     ) -> AgentResult:
-        """Process a user query through the ReAct agent."""
+        """Process a user query through the ReAct agent.
+        
+        With MemorySaver checkpointer, context (including tool calls) is preserved per thread_key.
+        """
         start_time = time.time()
-
-        print(f"\n{'='*60}")
-        print(f"🤖 LANGGRAPH PROCESSING: {user_query}")
-        print(f"🧵 Thread: {thread_key}")
-        print(f"{'='*60}\n")
 
         if VERBOSE:
             logger.info(f"LangGraph processing query: {user_query[:100]}...")
 
-        # Build messages
-        messages = []
-
-        # Add conversation history if provided
-        if conversation_history:
-            for msg in conversation_history[-6:]:  # Last 3 exchanges
-                role = msg.get("role", "user")
-                content = msg.get("content", "")
-                if role in ("user", "assistant") and content:
-                    messages.append((role, content))
-
-        # Add current query
-        messages.append(("user", user_query))
+        # Just send new message - checkpointer preserves full history per thread_key
+        messages = [("user", user_query)]
 
         # Configure with thread_id for checkpointing
         run_config = {"configurable": {"thread_id": thread_key}}
@@ -623,12 +708,6 @@ class LangGraphAgent:
 
             execution_time = int((time.time() - start_time) * 1000)
 
-            print(f"\n{'='*60}")
-            print(f"✅ RESPONSE READY ({execution_time}ms)")
-            print(f"🔧 Tools used: {tools_used}")
-            print(f"📝 Response: {response[:200]}...")
-            print(f"{'='*60}\n")
-
             return AgentResult(
                 response=response,
                 tools_used=tools_used,
@@ -636,7 +715,6 @@ class LangGraphAgent:
             )
 
         except Exception as e:
-            print(f"\n❌ LANGGRAPH ERROR: {e}\n")
             logger.error(f"LangGraph agent error: {e}", exc_info=True)
             raise
 

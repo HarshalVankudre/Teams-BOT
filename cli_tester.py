@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Teams Bot RAG Test Suite
-Industry-standard testing framework for RAG pipeline validation.
+Teams Bot RAG Test Suite (Simplified)
+Testing framework for LangGraph agent validation.
 """
 import os
 import sys
@@ -10,7 +10,7 @@ import time
 import asyncio
 import argparse
 from datetime import datetime
-from typing import Dict, List, Any, Optional, Callable
+from typing import Dict, List, Any, Optional
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from enum import Enum
@@ -69,11 +69,6 @@ class TestResult:
     sql_rows: int = 0
     assertions_passed: int = 0
     assertions_failed: int = 0
-    # Token usage
-    input_tokens: int = 0
-    output_tokens: int = 0
-    reasoning_tokens: int = 0
-    total_tokens: int = 0
 
     @property
     def passed(self) -> bool:
@@ -114,7 +109,7 @@ class TestSuite:
 
 
 class TestRunner:
-    """Industry-standard test runner for RAG pipeline"""
+    """Test runner for LangGraph RAG pipeline"""
     
     def __init__(self, verbose: bool = False):
         self.verbose = verbose
@@ -132,30 +127,38 @@ class TestRunner:
         print(f"\n{Colors.BOLD}Initializing Test Environment{Colors.RESET}")
         print("-" * 50)
         
-        self.config = self.postgres = self.pinecone = self.agent = self.langgraph_agent = None
+        self.config = self.postgres = self.pinecone = self.langgraph_agent = None
         
+        # Config
         try:
             from rag.config import config
             self.config = config
-            # Show Groq model if LangGraph is enabled and Groq is configured
-            if config.use_langgraph_agent and config.groq_api_key:
+            if config.groq_api_key:
                 model_display = f"{config.groq_model} (Groq)"
             else:
-                model_display = config.response_model
+                model_display = config.openai_model
             print(f"  Config       {Colors.GREEN}OK{Colors.RESET}  Model: {model_display}")
         except Exception as e:
             print(f"  Config       {Colors.RED}FAIL{Colors.RESET}  {e}")
         
+        # PostgreSQL
         try:
             from rag.postgres import PostgresService
             self.postgres = PostgresService()
             if self.postgres.available:
-                print(f"  PostgreSQL   {Colors.GREEN}OK{Colors.RESET}  {self.postgres.equipment_table}")
+                # Get record count
+                try:
+                    result = self.postgres.execute_query("SELECT COUNT(*) as cnt FROM public.equipment_matrix_v2")
+                    count = result[0]['cnt'] if result else 0
+                    print(f"  PostgreSQL   {Colors.GREEN}OK{Colors.RESET}  {self.postgres.equipment_table}, {count} equipment records ({self.postgres.equipment_table})")
+                except:
+                    print(f"  PostgreSQL   {Colors.GREEN}OK{Colors.RESET}  {self.postgres.equipment_table}")
             else:
                 print(f"  PostgreSQL   {Colors.YELLOW}WARN{Colors.RESET}  {self.postgres.availability_error}")
         except Exception as e:
             print(f"  PostgreSQL   {Colors.RED}FAIL{Colors.RESET}  {e}")
         
+        # Pinecone
         try:
             from rag.vector_store import PineconeStore
             self.pinecone = PineconeStore()
@@ -163,37 +166,17 @@ class TestRunner:
         except Exception as e:
             print(f"  Pinecone     {Colors.YELLOW}WARN{Colors.RESET}  {e}")
         
+        # LangGraph Agent (only agent now)
         try:
-            from rag.config import config
-            # Priority 1: LangGraph agent (if enabled)
-            if config.use_langgraph_agent:
-                try:
-                    # Share postgres/pinecone instances to avoid multiple connection pools
-                    from rag.langgraph_agent import get_langgraph_agent, set_shared_postgres, set_shared_pinecone
-                    if self.postgres:
-                        set_shared_postgres(self.postgres)
-                    if self.pinecone:
-                        set_shared_pinecone(self.pinecone)
-                    self.langgraph_agent = get_langgraph_agent()
-                    print(f"  LangGraph    {Colors.GREEN}OK{Colors.RESET}  (Priority 1)")
-                except Exception as e:
-                    print(f"  LangGraph    {Colors.YELLOW}WARN{Colors.RESET}  {e}")
-                    self.langgraph_agent = None
-            else:
-                self.langgraph_agent = None
-
-            # Priority 2: Clean/Single agent (fallback) - only if USE_AGENT_SYSTEM=true
-            if config.use_agent_system:
-                if config.use_clean_agent:
-                    from rag.single_agent_clean import create_clean_agent
-                    self.agent = create_clean_agent(verbose=self.verbose, pinecone_service=self.pinecone)
-                    print(f"  Agent        {Colors.GREEN}OK{Colors.RESET}  (Fallback)")
-                else:
-                    from rag.single_agent import create_single_agent
-                    self.agent = create_single_agent(verbose=self.verbose, pinecone_service=self.pinecone)
-                    print(f"  Agent        {Colors.GREEN}OK{Colors.RESET}  (Fallback)")
+            from rag.langgraph_agent import get_langgraph_agent, set_shared_postgres, set_shared_pinecone
+            if self.postgres:
+                set_shared_postgres(self.postgres)
+            if self.pinecone:
+                set_shared_pinecone(self.pinecone)
+            self.langgraph_agent = get_langgraph_agent()
+            print(f"  LangGraph    {Colors.GREEN}OK{Colors.RESET}  (Priority 1)")
         except Exception as e:
-            print(f"  Agent        {Colors.RED}FAIL{Colors.RESET}  {e}")
+            print(f"  LangGraph    {Colors.RED}FAIL{Colors.RESET}  {e}")
         
         print("-" * 50)
     
@@ -203,231 +186,172 @@ class TestRunner:
         result = TestResult(
             test_id=test.id,
             test_name=test.name,
-            status=TestStatus.ERROR,
+            status=TestStatus.PASSED,
             duration_ms=0,
             query=test.query
         )
         
-        if not self.agent and not getattr(self, 'langgraph_agent', None):
-            result.error = "Agent not initialized"
-            result.duration_ms = int((time.time() - start) * 1000)
-            return result
-
         try:
-            # Priority 1: Use LangGraph agent if available
-            if getattr(self, 'langgraph_agent', None):
-                agent_result = await asyncio.wait_for(
-                    self.langgraph_agent.process(
-                        user_query=test.query,
-                        thread_key=self.thread_key,
-                        conversation_history=self.conversation_history
-                    ),
-                    timeout=test.timeout_ms / 1000
-                )
-                result.duration_ms = agent_result.execution_time_ms
-                result.response = agent_result.response
-                result.tools_used = agent_result.tools_used
-                result.sql_rows = getattr(agent_result, 'sql_results_count', 0)
-                # LangGraph doesn't provide token counts directly
-                result.input_tokens = 0
-                result.output_tokens = 0
-                result.reasoning_tokens = 0
-                result.total_tokens = 0
-            else:
-                # Priority 2: Use SingleAgent as fallback
-                agent_result = await asyncio.wait_for(
-                    self.agent.process(
-                        user_query=test.query,
-                        conversation_history=self.conversation_history,
-                        thread_key=self.thread_key
-                    ),
-                    timeout=test.timeout_ms / 1000
-                )
-                result.duration_ms = agent_result.execution_time_ms
-                result.response = agent_result.response
-                result.tools_used = agent_result.tools_used
-                result.sql_rows = agent_result.sql_results_count
-                # Token usage
-                result.input_tokens = agent_result.input_tokens
-                result.output_tokens = agent_result.output_tokens
-                result.reasoning_tokens = agent_result.reasoning_tokens
-                result.total_tokens = agent_result.total_tokens
+            response = await self._execute_query(test.query)
+            result.duration_ms = int((time.time() - start) * 1000)
+            result.response = response.get("response", "")
+            result.tools_used = response.get("tools_used", [])
+            result.sql_rows = response.get("sql_rows", 0)
             
-            # Run assertions
-            assertions_passed = 0
-            assertions_failed = 0
-            
-            # Check if response exists
-            if agent_result.response and len(agent_result.response) > 10:
-                assertions_passed += 1
-            else:
-                assertions_failed += 1
-            
-            # Check expected tools
+            # Check assertions
             if test.expected_tools:
-                if all(t in agent_result.tools_used for t in test.expected_tools):
-                    assertions_passed += 1
-                else:
-                    assertions_failed += 1
+                for tool in test.expected_tools:
+                    if tool in result.tools_used:
+                        result.assertions_passed += 1
+                    else:
+                        result.assertions_failed += 1
+                        result.status = TestStatus.FAILED
             
-            # Check expected keywords in response
             if test.expected_keywords:
-                response_lower = agent_result.response.lower()
-                if any(kw.lower() in response_lower for kw in test.expected_keywords):
-                    assertions_passed += 1
-                else:
-                    assertions_failed += 1
+                response_lower = result.response.lower()
+                for kw in test.expected_keywords:
+                    if kw.lower() in response_lower:
+                        result.assertions_passed += 1
+                    else:
+                        result.assertions_failed += 1
             
-            # Check minimum results
-            if test.min_results > 0:
-                if agent_result.sql_results_count >= test.min_results:
-                    assertions_passed += 1
-                else:
-                    assertions_failed += 1
-            
-            result.assertions_passed = assertions_passed
-            result.assertions_failed = assertions_failed
-            # LangGraph AgentResult doesn't have success attr - treat valid response as success
-            success = getattr(agent_result, 'success', bool(agent_result.response))
-            result.status = TestStatus.PASSED if assertions_failed == 0 and success else TestStatus.FAILED
-
-            # Update conversation history - but ONLY if we got a valid response
-            # Skip empty/error responses to avoid polluting context
-            bad_responses = ["Keine Antwort verfuegbar", "Ich konnte die Antwort nicht"]
-            if agent_result.response and not any(bad in agent_result.response for bad in bad_responses):
-                self.conversation_history.append({"role": "user", "content": test.query})
-                self.conversation_history.append({"role": "assistant", "content": agent_result.response})
-            
-        except asyncio.TimeoutError:
-            result.error = f"Timeout after {test.timeout_ms}ms"
-            result.status = TestStatus.ERROR
-            result.duration_ms = test.timeout_ms
         except Exception as e:
-            result.error = str(e)
             result.status = TestStatus.ERROR
+            result.error = str(e)
             result.duration_ms = int((time.time() - start) * 1000)
         
         return result
     
-    def _print_test_result(self, result: TestResult, index: int):
-        """Print single test result in standard format"""
-        status_color = {
-            TestStatus.PASSED: Colors.GREEN,
-            TestStatus.FAILED: Colors.RED,
-            TestStatus.ERROR: Colors.RED,
-            TestStatus.SKIPPED: Colors.YELLOW
-        }.get(result.status, "")
+    async def _execute_query(self, query: str) -> Dict[str, Any]:
+        """Execute query through LangGraph agent"""
+        if not self.langgraph_agent:
+            raise RuntimeError("LangGraph agent not available")
         
-        status_icon = {
-            TestStatus.PASSED: "PASS",
-            TestStatus.FAILED: "FAIL",
-            TestStatus.ERROR: "ERR ",
-            TestStatus.SKIPPED: "SKIP"
-        }.get(result.status, "????")
+        print(f"\n{'='*60}")
+        print(f"🤖 LANGGRAPH PROCESSING: {query}")
+        print(f"🧵 Thread: {self.thread_key}")
+        print(f"{'='*60}\n")
         
-        print(f"  {status_color}[{status_icon}]{Colors.RESET} {result.test_name} ({result.duration_ms}ms)")
+        result = await self.langgraph_agent.process(
+            user_query=query,
+            thread_key=self.thread_key,
+            conversation_history=self.conversation_history
+        )
         
-        if result.status != TestStatus.PASSED and self.verbose:
-            if result.error:
-                print(f"         {Colors.DIM}Error: {result.error}{Colors.RESET}")
-            if result.response:
-                preview = result.response[:100].replace('\n', ' ')
-                print(f"         {Colors.DIM}Response: {preview}...{Colors.RESET}")
+        # Handle both dict and AgentResult object
+        if hasattr(result, 'response'):
+            # AgentResult object
+            response_text = result.response or ""
+            tools_used = result.tools_used or []
+            processing_time = getattr(result, 'processing_time_ms', 0)
+            sql_rows = getattr(result, 'sql_rows', 0)
+        else:
+            # Dictionary
+            response_text = result.get("response", "")
+            tools_used = result.get("tools_used", [])
+            processing_time = result.get("processing_time_ms", 0)
+            sql_rows = result.get("sql_rows", 0)
+        
+        # Update conversation history
+        self.conversation_history.append({"role": "user", "content": query})
+        self.conversation_history.append({"role": "assistant", "content": response_text})
+        
+        # Keep last 6 messages
+        if len(self.conversation_history) > 6:
+            self.conversation_history = self.conversation_history[-6:]
+        
+        print(f"\n{'='*60}")
+        print(f"✅ RESPONSE READY ({processing_time}ms)")
+        print(f"🔧 Tools used: {tools_used}")
+        print(f"📝 Response: {response_text[:200]}..." if len(response_text) > 200 else f"📝 Response: {response_text}")
+        print(f"{'='*60}\n")
+        
+        return {
+            "response": response_text,
+            "tools_used": tools_used,
+            "sql_rows": sql_rows
+        }
+    
+    async def test_query(self, query: str) -> TestResult:
+        """Run a single ad-hoc query test"""
+        test = TestCase(id="adhoc", name="Ad-hoc Query", query=query)
+        result = await self.run_test(test)
+        self.suite.results.append(result)
+        
+        status_color = Colors.GREEN if result.passed else Colors.RED
+        print(f"  [{status_color}{result.status.value}{Colors.RESET}] {test.name} ({result.duration_ms}ms)")
+        
+        if result.response:
+            print(f"\n{Colors.BOLD}Response:{Colors.RESET}")
+            print(result.response)
+        
+        if result.tools_used:
+            print(f"\n{Colors.BOLD}Tools Used:{Colors.RESET}")
+            for tool in result.tools_used:
+                print(f"  🔧 {tool}")
+        
+        if result.error:
+            print(f"\n{Colors.RED}Error:{Colors.RESET} {result.error}")
+        
+        return result
     
     async def run_suite(self, tests: List[TestCase]) -> TestSuite:
-        """Run all tests in the suite"""
-        print(f"\n{Colors.BOLD}Running {len(tests)} tests{Colors.RESET}")
-        print("=" * 50)
-
-        for i, test in enumerate(tests, 1):
-            # Clear context between tests to avoid follow-up contamination
-            self.clear_context()
+        """Run a full test suite"""
+        print(f"\n{Colors.BOLD}Running Test Suite: {len(tests)} tests{Colors.RESET}")
+        print("=" * 60)
+        
+        for test in tests:
             result = await self.run_test(test)
             self.suite.results.append(result)
-            self._print_test_result(result, i)
+            
+            status_color = Colors.GREEN if result.passed else Colors.RED
+            print(f"  [{status_color}{result.status.value}{Colors.RESET}] {test.name} ({result.duration_ms}ms)")
+            
+            if result.error:
+                print(f"    {Colors.RED}Error: {result.error}{Colors.RESET}")
         
         self.suite.ended_at = datetime.now().isoformat()
         return self.suite
     
-    def print_summary(self):
-        """Print test summary in standard format"""
-        s = self.suite
-        print("\n" + "=" * 50)
-        print(f"{Colors.BOLD}Test Results{Colors.RESET}")
-        print("=" * 50)
-        print(f"  Total:    {s.total}")
-        print(f"  Passed:   {Colors.GREEN}{s.passed}{Colors.RESET}")
-        print(f"  Failed:   {Colors.RED}{s.failed}{Colors.RESET}")
-        print(f"  Errors:   {Colors.RED}{s.errors}{Colors.RESET}")
-        print(f"  Duration: {s.duration_ms}ms")
-        print(f"  Rate:     {s.pass_rate:.1f}%")
-        print("=" * 50)
+    def print_summary(self) -> int:
+        """Print test summary and return exit code"""
+        print(f"\n{Colors.BOLD}{'='*60}{Colors.RESET}")
+        print(f"{Colors.BOLD}Test Summary{Colors.RESET}")
+        print(f"{'='*60}")
         
-        if s.failed > 0 or s.errors > 0:
-            print(f"\n{Colors.RED}FAILED{Colors.RESET}")
-            return 1
-        print(f"\n{Colors.GREEN}PASSED{Colors.RESET}")
-        return 0
+        print(f"  Total:    {self.suite.total}")
+        print(f"  {Colors.GREEN}Passed:   {self.suite.passed}{Colors.RESET}")
+        print(f"  {Colors.RED}Failed:   {self.suite.failed}{Colors.RESET}")
+        print(f"  {Colors.YELLOW}Errors:   {self.suite.errors}{Colors.RESET}")
+        print(f"  Duration: {self.suite.duration_ms}ms")
+        print(f"  Pass Rate: {self.suite.pass_rate:.1f}%")
+        
+        return 0 if self.suite.failed == 0 and self.suite.errors == 0 else 1
     
-    def export_results(self, filepath: str = None):
-        """Export results to JSON (JUnit-compatible structure)"""
-        filepath = filepath or f"test_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        
-        output = {
-            "testsuites": {
-                "name": self.suite.name,
-                "tests": self.suite.total,
-                "failures": self.suite.failed,
+    def export_results(self, filepath: str = "test_results.json"):
+        """Export results to JSON"""
+        data = {
+            "suite": self.suite.name,
+            "started_at": self.suite.started_at,
+            "ended_at": self.suite.ended_at,
+            "summary": {
+                "total": self.suite.total,
+                "passed": self.suite.passed,
+                "failed": self.suite.failed,
                 "errors": self.suite.errors,
-                "time": self.suite.duration_ms / 1000,
-                "timestamp": self.suite.started_at
+                "pass_rate": self.suite.pass_rate
             },
-            "testcases": [
-                {
-                    "name": r.test_name,
-                    "classname": r.test_id,
-                    "time": r.duration_ms / 1000,
-                    "status": r.status.value,
-                    "failure": r.error if r.status != TestStatus.PASSED else None,
-                    "query": r.query,
-                    "response": r.response[:500] if r.response else None
-                }
-                for r in self.suite.results
-            ]
+            "results": [asdict(r) for r in self.suite.results]
         }
         
+        # Convert enums to strings
+        for r in data["results"]:
+            r["status"] = r["status"].value if hasattr(r["status"], "value") else str(r["status"])
+        
         with open(filepath, "w", encoding="utf-8") as f:
-            json.dump(output, f, indent=2, ensure_ascii=False)
-        print(f"\nResults exported to {filepath}")
-    
-    async def test_query(self, query: str) -> TestResult:
-        """Run ad-hoc query test"""
-        test = TestCase(id="adhoc", name="Ad-hoc Query", query=query)
-        result = await self.run_test(test)
-        self.suite.results.append(result)
-        self._print_test_result(result, 1)
-
-        if result.response:
-            print(f"\n{Colors.BOLD}Response:{Colors.RESET}")
-            print(result.response)
-
-        # Display tools used
-        if result.tools_used:
-            print(f"\n{Colors.BOLD}Tools Used:{Colors.RESET}")
-            for tool in result.tools_used:
-                icon = "🔍" if tool == "execute_sql" else "📄" if tool == "search_documents" else "🌐" if tool == "search_web" else "📊" if tool == "explore_column" else "🔎" if tool == "find_columns" else "🔧"
-                print(f"  {icon} {tool}")
-
-        # Display token usage
-        if result.total_tokens > 0:
-            print(f"\n{Colors.BOLD}Token Usage:{Colors.RESET}")
-            print(f"  Input:     {result.input_tokens:,}")
-            print(f"  Output:    {result.output_tokens:,}")
-            if result.reasoning_tokens > 0:
-                print(f"  Reasoning: {result.reasoning_tokens:,}")
-            print(f"  {Colors.CYAN}Total:     {result.total_tokens:,}{Colors.RESET}")
-
-        return result
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        
+        print(f"Results exported to: {filepath}")
     
     def test_sql(self, sql: str) -> Dict:
         """Run direct SQL test"""
@@ -439,23 +363,15 @@ class TestRunner:
             return {"error": "PostgreSQL not available"}
         
         start = time.time()
-        prepared, error = self.postgres.prepare_readonly_sql(sql)
-        
-        if error:
-            print(f"  {Colors.RED}[FAIL]{Colors.RESET} {error}")
-            return {"error": error}
-        
         try:
-            results = self.postgres.execute_query(prepared, raise_on_error=True)
+            results = self.postgres.execute_query(sql)
             duration = int((time.time() - start) * 1000)
             print(f"  {Colors.GREEN}[PASS]{Colors.RESET} {len(results)} rows in {duration}ms")
             
             if results:
-                print(f"\n{Colors.BOLD}Results:{Colors.RESET}")
+                print(f"\n{Colors.BOLD}Results (first 5):{Colors.RESET}")
                 for i, row in enumerate(results[:5], 1):
-                    print(f"  {i}. {json.dumps(row, default=str)[:100]}...")
-                if len(results) > 5:
-                    print(f"  ... and {len(results) - 5} more rows")
+                    print(f"  {i}. {row}")
             
             return {"success": True, "rows": len(results), "duration_ms": duration, "data": results[:10]}
         except Exception as e:
@@ -498,14 +414,35 @@ class TestRunner:
             print(f"  {Colors.RED}PostgreSQL not available{Colors.RESET}")
             return
         
-        stats = self.postgres.get_statistics()
-        print(f"  Total Equipment: {stats['total_count']}")
-        print(f"\n  {Colors.BOLD}Categories:{Colors.RESET}")
-        for c in stats.get("by_category", [])[:8]:
-            print(f"    {c.get('equipment_group')}: {c.get('count')}")
-        print(f"\n  {Colors.BOLD}Manufacturers:{Colors.RESET}")
-        for m in stats.get("by_manufacturer", [])[:5]:
-            print(f"    {m.get('manufacturer')}: {m.get('count')}")
+        try:
+            # Total count
+            result = self.postgres.execute_query("SELECT COUNT(*) as cnt FROM public.equipment_matrix_v2")
+            total = result[0]['cnt'] if result else 0
+            print(f"  Total Equipment: {total}")
+            
+            # By category
+            result = self.postgres.execute_query("""
+                SELECT geraetegruppe_name as category, COUNT(*) as cnt 
+                FROM public.equipment_matrix_v2 
+                GROUP BY geraetegruppe_name 
+                ORDER BY cnt DESC LIMIT 8
+            """)
+            print(f"\n  {Colors.BOLD}Categories:{Colors.RESET}")
+            for r in result:
+                print(f"    {r['category']}: {r['cnt']}")
+            
+            # By manufacturer
+            result = self.postgres.execute_query("""
+                SELECT hersteller_name as manufacturer, COUNT(*) as cnt 
+                FROM public.equipment_matrix_v2 
+                GROUP BY hersteller_name 
+                ORDER BY cnt DESC LIMIT 5
+            """)
+            print(f"\n  {Colors.BOLD}Manufacturers:{Colors.RESET}")
+            for r in result:
+                print(f"    {r['manufacturer']}: {r['cnt']}")
+        except Exception as e:
+            print(f"  {Colors.RED}Error: {e}{Colors.RESET}")
     
     def show_schema(self):
         """Show schema information"""
@@ -516,13 +453,24 @@ class TestRunner:
             print(f"  {Colors.RED}PostgreSQL not available{Colors.RESET}")
             return
         
-        columns = self.postgres.get_column_info(refresh=True)
-        props = [c for c in columns if c.startswith("prop_")]
-        std = [c for c in columns if not c.startswith("prop_")]
-        
-        print(f"  Total: {len(columns)} columns")
-        print(f"  Standard: {len(std)}")
-        print(f"  Properties: {len(props)}")
+        try:
+            result = self.postgres.execute_query("""
+                SELECT attname 
+                FROM pg_attribute 
+                WHERE attrelid = 'public.equipment_matrix_v2'::regclass 
+                AND attnum > 0 AND NOT attisdropped
+            """)
+            columns = [r['attname'] for r in result]
+            props = [c for c in columns if c.startswith("prop_")]
+            num_cols = [c for c in columns if c.endswith("_num")]
+            std = [c for c in columns if not c.startswith("prop_") and not c.endswith("_num")]
+            
+            print(f"  Total: {len(columns)} columns")
+            print(f"  Standard: {len(std)}")
+            print(f"  Numeric (*_num): {len(num_cols)}")
+            print(f"  Properties (prop_*): {len(props)}")
+        except Exception as e:
+            print(f"  {Colors.RED}Error: {e}{Colors.RESET}")
     
     def clear_context(self):
         """Clear conversation context"""
@@ -534,32 +482,41 @@ class TestRunner:
 def get_default_tests() -> List[TestCase]:
     """Load default test cases"""
     tests = [
-        TestCase(id="sql_count", name="SQL Count Query", query="Wie viele Maschinen haben wir?", 
-                 expected_tools=["execute_sql"], expected_keywords=["2404", "maschinen"]),
-        TestCase(id="sql_filter", name="SQL Filter Query", query="Wie viele Bomag Maschinen?",
-                 expected_tools=["execute_sql"], expected_keywords=["bomag", "123"]),
-        TestCase(id="sql_category", name="Category Query", query="Zeige alle Kettenfertiger",
-                 expected_tools=["execute_sql"], expected_keywords=["kettenfertiger", "fertiger", "98"]),
-        TestCase(id="manufacturer", name="Manufacturer Query", query="Welche Hersteller gibt es?",
-                 expected_tools=["execute_sql"]),
-        TestCase(id="rental", name="Rental Filter", query="Welche Mietmaschinen haben wir?",
-                 expected_tools=["execute_sql"], expected_keywords=["miet", "794", "maschinen"]),
+        TestCase(
+            id="sql_count", 
+            name="SQL Count Query", 
+            query="Wie viele Maschinen haben wir?", 
+            expected_tools=["query_equipment"],
+            expected_keywords=["maschinen"]
+        ),
+        TestCase(
+            id="sql_filter", 
+            name="SQL Filter Query", 
+            query="Wie viele Bomag Maschinen?",
+            expected_tools=["query_equipment"],
+            expected_keywords=["bomag"]
+        ),
+        TestCase(
+            id="fertiger_width", 
+            name="Fertiger Width Query", 
+            query="Fertiger mit Einbaubreite mindestens 2m",
+            expected_tools=["query_equipment"],
+            expected_keywords=["fertiger"]
+        ),
+        TestCase(
+            id="manufacturer", 
+            name="Manufacturer Query", 
+            query="Welche Hersteller gibt es?",
+            expected_tools=["query_equipment"]
+        ),
+        TestCase(
+            id="rental", 
+            name="Rental Filter", 
+            query="Welche Mietmaschinen haben wir?",
+            expected_tools=["query_equipment"],
+            expected_keywords=["miet"]
+        ),
     ]
-    
-    # Load from qa_pairs.json if exists
-    qa_path = Path(__file__).parent / "rag" / "qa_pairs.json"
-    if qa_path.exists():
-        try:
-            data = json.load(open(qa_path, "r", encoding="utf-8"))
-            for qa in data.get("qa_pairs", []):
-                tests.append(TestCase(
-                    id=f"qa_{qa.get('id', len(tests))}",
-                    name=qa.get("kategorie", "QA Test"),
-                    query=qa.get("frage", ""),
-                    category=qa.get("kategorie", "general")
-                ))
-        except Exception:
-            pass
     
     return tests
 

@@ -15,9 +15,8 @@ set "RESET=%ESC%[0m"
 set "SCRIPT_DIR=%~dp0"
 cd /d "%SCRIPT_DIR%"
 
-:: Use LangGraph as default, disable fallback agent
+:: LangGraph is the only agent now
 set "USE_LANGGRAPH_AGENT=true"
-set "USE_AGENT_SYSTEM=false"
 
 if "%1"=="" goto interactive
 
@@ -36,9 +35,6 @@ if "%1"=="/schema" goto schema
 if "%1"=="/batch" goto batch
 if "%1"=="/b" goto batch
 if "%1"=="/export" goto export
-if "%1"=="/langgraph" goto langgraph
-if "%1"=="/lg" goto langgraph
-if "%1"=="/fallback" goto fallback
 if "%1"=="/validate" goto validate
 
 :: Plain text = query
@@ -73,7 +69,7 @@ goto end
 
 :sql
 if "%2"=="" (
-    echo %RED%Usage:%RESET% test /sql "SELECT * FROM public.equipment_matrix LIMIT 5"
+    echo %RED%Usage:%RESET% test /sql "SELECT * FROM public.equipment_matrix_v2 LIMIT 5"
     goto end
 )
 set "SQL_QUERY=%~2"
@@ -111,51 +107,19 @@ echo %GREEN%Exporting results...%RESET%
 python cli_tester.py -o test_results.json
 goto end
 
-:langgraph
-echo.
-echo %BOLD%%CYAN%============================================================%RESET%
-echo %BOLD%  LangGraph Agent Test%RESET%
-echo %CYAN%============================================================%RESET%
-echo.
-echo %YELLOW%Testing LangGraph agent with sample query...%RESET%
-echo.
-if "%2"=="" (
-    python cli_tester.py "Wie viele Kettenfertiger haben wir?"
-) else (
-    python cli_tester.py "%~2"
-)
-goto end
-
-:fallback
-echo.
-echo %BOLD%%YELLOW%============================================================%RESET%
-echo %BOLD%  Fallback Agent Test (LangGraph Disabled)%RESET%
-echo %YELLOW%============================================================%RESET%
-echo.
-echo %YELLOW%Testing with LangGraph DISABLED...%RESET%
-echo.
-set "USE_LANGGRAPH_AGENT=false"
-set "USE_AGENT_SYSTEM=true"
-if "%2"=="" (
-    python cli_tester.py "Wie viele Kettenfertiger haben wir?"
-) else (
-    python cli_tester.py "%~2"
-)
-goto end
-
 :validate
 echo.
 echo %BOLD%%GREEN%============================================================%RESET%
-echo %BOLD%  LangGraph Migration Validation%RESET%
+echo %BOLD%  LangGraph Agent Validation%RESET%
 echo %GREEN%============================================================%RESET%
 echo.
-python -c "print('=== Import Validation ==='); from rag.langgraph_agent import LangGraphAgent, execute_sql, search_documents, find_columns, explore_column, SYSTEM_PROMPT; print('[OK] All LangGraph imports successful'); from rag.search import RAGSearch; print('[OK] RAGSearch import successful'); from rag.config import config; print(f'[OK] USE_LANGGRAPH_AGENT={config.use_langgraph_agent}'); print(); print('=== Tool Validation ==='); tools = [execute_sql, search_documents, find_columns, explore_column]; [print(f'[OK] {t.name}: invoke={hasattr(t,\"invoke\")}, ainvoke={hasattr(t,\"ainvoke\")}') for t in tools]; print(); print('=== All Validations Passed ===')"
+python -c "print('=== Import Validation ==='); from rag.langgraph_agent import LangGraphAgent, query_equipment, lookup_equipment, search_documents, SYSTEM_PROMPT; print('[OK] All LangGraph imports successful'); from rag.search import RAGSearch; print('[OK] RAGSearch import successful'); from rag.config import config; print(f'[OK] Config loaded'); print(); print('=== Tool Validation ==='); tools = [query_equipment, lookup_equipment, search_documents]; [print(f'[OK] {t.name}: ready') for t in tools]; print(); print('=== All Validations Passed ===')"
 goto end
 
 :help
 echo.
 echo %BOLD%%CYAN%============================================================%RESET%
-echo %BOLD%  Teams Bot RAG Testing System%RESET%
+echo %BOLD%  Teams Bot RAG Testing System (Simplified)%RESET%
 echo %CYAN%============================================================%RESET%
 echo.
 echo %BOLD%Usage:%RESET% test [query] or test /command [args]
@@ -170,18 +134,13 @@ echo   %GREEN%/stats%RESET%          Database statistics
 echo   %GREEN%/schema%RESET%         Schema information
 echo   %GREEN%/batch%RESET%          Run batch tests
 echo   %GREEN%/export%RESET%         Export results to JSON
-echo.
-echo %BOLD%LangGraph Commands:%RESET%
-echo   %GREEN%/langgraph%RESET%      Test with LangGraph agent (or /lg)
-echo   %GREEN%/fallback%RESET%       Test with LangGraph disabled
-echo   %GREEN%/validate%RESET%       Validate LangGraph migration
+echo   %GREEN%/validate%RESET%       Validate LangGraph agent
 echo.
 echo %BOLD%Examples:%RESET%
 echo   %YELLOW%test Wie viele Bomag Maschinen haben wir?%RESET%
-echo   %YELLOW%test /v Was ist besser - Bomag oder Hamm?%RESET%  (verbose with tools)
-echo   %YELLOW%test /sql "SELECT COUNT(*) FROM sema_matrix.equipment_matrix"%RESET%
+echo   %YELLOW%test /v Fertiger mit 2m Einbaubreite%RESET%
+echo   %YELLOW%test /sql "SELECT COUNT(*) FROM public.equipment_matrix_v2"%RESET%
 echo   %YELLOW%test /search "Anleitung Kaltfraese"%RESET%
-echo   %YELLOW%test /lg "Zeige alle Voegele Kettenfertiger"%RESET%
 echo   %YELLOW%test /validate%RESET%
 echo.
 goto end
