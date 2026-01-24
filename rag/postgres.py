@@ -12,9 +12,12 @@ _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 try:
     import psycopg2
     from psycopg2.extras import RealDictCursor
+    from psycopg2.pool import ThreadedConnectionPool
     POSTGRES_AVAILABLE = True
+    POOLING_AVAILABLE = True
 except ImportError:
     POSTGRES_AVAILABLE = False
+    POOLING_AVAILABLE = False
     print("[WARNING] psycopg2 not installed. PostgreSQL queries disabled.")
 
 from .schema import DATABASE_SCHEMA
@@ -172,6 +175,11 @@ class PostgresService:
         if "LIMIT" not in sql_upper and not is_union_query:
             sql = f"{sql} LIMIT {default_limit}"
 
+        # Auto-convert LIKE to ILIKE for case-insensitive matching (PostgreSQL best practice)
+        # This handles common LLM mistake of using case-sensitive LIKE
+        import re
+        sql = re.sub(r'\bLIKE\b', 'ILIKE', sql, flags=re.IGNORECASE)
+
         return sql, None
 
     def __init__(self, config: Optional[PostgresConfig] = None):
@@ -182,20 +190,40 @@ class PostgresService:
         self.available = POSTGRES_AVAILABLE and (config_error is None)
         self.availability_error: Optional[str] = None
         self._column_cache: Optional[Dict[str, str]] = None
+        self._pool: Optional[ThreadedConnectionPool] = None
 
         if self.available:
-            # Test connection
+            # Initialize connection pool
             try:
-                conn = self._get_connection()
-                cursor = conn.cursor()
-                cursor.execute(f"SELECT COUNT(*) FROM {self.equipment_table}")
-                count = cursor.fetchone()[0]
-                cursor.close()
-                conn.close()
-                print(
-                    f"[PostgreSQL] Connected to {self.config.host}/{self.config.database}, "
-                    f"{count} equipment records ({self.equipment_table})"
-                )
+                if POOLING_AVAILABLE:
+                    self._pool = ThreadedConnectionPool(
+                        minconn=1,
+                        maxconn=5,
+                        **self.config.to_dict()
+                    )
+                    # Test connection from pool
+                    conn = self._pool.getconn()
+                    cursor = conn.cursor()
+                    cursor.execute(f"SELECT COUNT(*) FROM {self.equipment_table}")
+                    count = cursor.fetchone()[0]
+                    cursor.close()
+                    self._pool.putconn(conn)
+                    print(
+                        f"[PostgreSQL] Connection pool initialized (1-5 connections), "
+                        f"{count} equipment records ({self.equipment_table})"
+                    )
+                else:
+                    # Fallback to per-request connections
+                    conn = psycopg2.connect(**self.config.to_dict())
+                    cursor = conn.cursor()
+                    cursor.execute(f"SELECT COUNT(*) FROM {self.equipment_table}")
+                    count = cursor.fetchone()[0]
+                    cursor.close()
+                    conn.close()
+                    print(
+                        f"[PostgreSQL] Connected (no pooling), "
+                        f"{count} equipment records ({self.equipment_table})"
+                    )
             except Exception as e:
                 print(f"[PostgreSQL] Connection failed: {e}")
                 self.availability_error = f"Connection failed: {e}"
@@ -206,8 +234,24 @@ class PostgresService:
             self.availability_error = reason
 
     def _get_connection(self):
-        """Get database connection"""
+        """Get database connection from pool or create new one."""
+        if self._pool:
+            return self._pool.getconn()
         return psycopg2.connect(**self.config.to_dict())
+
+    def _release_connection(self, conn):
+        """Release connection back to pool or close it."""
+        if self._pool:
+            self._pool.putconn(conn)
+        else:
+            conn.close()
+
+    def close_pool(self):
+        """Close all connections in the pool."""
+        if self._pool:
+            self._pool.closeall()
+            self._pool = None
+            print("[PostgreSQL] Connection pool closed")
 
     def execute_query(
         self,
@@ -222,6 +266,7 @@ class PostgresService:
         Args:
             sql: SQL query to execute
             params: Optional query parameters (recommended for non-LLM queries)
+            raise_on_error: If True, raise exceptions instead of returning empty list
 
         Returns:
             List of result dictionaries
@@ -246,7 +291,7 @@ class PostgresService:
             return []
         finally:
             cursor.close()
-            conn.close()
+            self._release_connection(conn)
 
     def get_column_info(self, refresh: bool = False) -> Dict[str, str]:
         """Fetch column metadata for the equipment table."""

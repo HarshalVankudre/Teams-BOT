@@ -1,214 +1,173 @@
-<p align="center">
-  <img src="outline.png" alt="Teams-BOT" width="120" />
-</p>
+<div align="center">
 
-<h1 align="center">Teams-BOT</h1>
+# Teams Equipment Assistant
 
-<p align="center">
-  A production-ready FastAPI backend for a Microsoft Teams bot powered by OpenAI + RAG (PostgreSQL + Pinecone).
-</p>
+### AI-Powered Microsoft Teams Bot for Construction Equipment Queries
 
-<p align="center">
-  <a href="https://python.org"><img alt="Python" src="https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white"></a>
-  <a href="https://fastapi.tiangolo.com"><img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-0.115-009688?style=flat-square&logo=fastapi&logoColor=white"></a>
-  <a href="https://openai.com"><img alt="OpenAI" src="https://img.shields.io/badge/OpenAI-API-412991?style=flat-square&logo=openai&logoColor=white"></a>
-  <a href="https://cloud.google.com/run"><img alt="Cloud Run" src="https://img.shields.io/badge/Google_Cloud_Run-4285F4?style=flat-square&logo=google-cloud&logoColor=white"></a>
-  <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/License-MIT-yellow?style=flat-square"></a>
-</p>
+[![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![LangGraph](https://img.shields.io/badge/LangGraph-1C3C3C?style=for-the-badge&logo=langchain&logoColor=white)](https://langchain-ai.github.io/langgraph/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-316192?style=for-the-badge&logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![Pinecone](https://img.shields.io/badge/Pinecone-000000?style=for-the-badge&logo=pinecone&logoColor=white)](https://www.pinecone.io/)
+[![Redis](https://img.shields.io/badge/Redis-DC382D?style=for-the-badge&logo=redis&logoColor=white)](https://redis.io/)
+
+*A production-grade RAG system combining structured database queries with semantic document search*
+
+</div>
 
 ---
 
-## What this is
+## Overview
 
-Teams-BOT connects **Microsoft Teams** (via **Bot Framework**) to an LLM-backed assistant with **tool access**:
+A Microsoft Teams bot backend that serves as an intelligent assistant for **RÜKO Baumaschinen**, a construction equipment rental company. The bot answers German-language queries about machinery inventory by combining:
 
-- **Structured data**: PostgreSQL (`equipment_matrix`) via safe, SELECT-only SQL
-- **Unstructured/internal docs**: Pinecone semantic search (documents + machinery namespaces)
-- **Optional web**: Tavily search for supplemental, external info
-- **Multi-turn conversations**: Redis-backed history with per-user isolation
-- **Better follow-ups**: conversation-aware query rewriting + multi-query semantic retrieval (no hardcoded synonym lists)
-
-> For setup details and operational notes, see [`SETUP_GUIDE.md`](SETUP_GUIDE.md).
+- **Structured Data** — SQL queries across 2,400+ equipment records with 100+ properties
+- **Unstructured Data** — Semantic search through technical manuals and documentation
+- **Conversational Memory** — Multi-turn conversations with intelligent follow-ups
 
 ---
 
-## Quickstart (local)
+## Architecture
 
-### 1) Install
-
-```bash
-python -m venv .venv
-# Windows:
-#   .\.venv\Scripts\activate
-# macOS/Linux:
-#   source .venv/bin/activate
-
-pip install -r requirements.txt
 ```
-
-### 2) Configure
-
-Copy `.env.example` -> `.env` and fill in required values.
-
-Minimum required keys:
-
-```env
-OPENAI_API_KEY=
-OPENAI_MODEL=
-REASONING_EFFORT=
-BOT_APP_ID=
-BOT_APP_PASSWORD=
-AZURE_TENANT_ID=
-PINECONE_API_KEY=
-PINECONE_HOST=
-POSTGRES_HOST=
-POSTGRES_PORT=
-POSTGRES_DB=
-POSTGRES_SCHEMA=
-POSTGRES_EQUIPMENT_TABLE=
-POSTGRES_USER=
-POSTGRES_PASSWORD=
-```
-
-### 3) Run
-
-```bash
-# Default: http://localhost:8001
-python app.py
-
-# Or:
-uvicorn app:app --reload --port 8000
-```
-
-Notes:
-- `python app.py` listens on `8001` by default.
-- Docker/Cloud Run listen on `$PORT` (defaults to `8080` in the `Dockerfile`).
-
-### 4) Smoke-test without Teams
-
-```bash
-python cli_test.py
+┌─────────────────────────────────────────────────────────────────┐
+│                      Microsoft Teams                             │
+└──────────────────────────┬──────────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    FastAPI Backend                               │
+│  ┌───────────────┐  ┌──────────────┐  ┌───────────────────┐    │
+│  │ Bot Framework │  │ OAuth Cache  │  │ Typing Indicators │    │
+│  │    Webhook    │  │ (Thread-safe)│  │   (Real-time)     │    │
+│  └───────┬───────┘  └──────────────┘  └───────────────────┘    │
+└──────────┼──────────────────────────────────────────────────────┘
+           │
+           ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                   RAG Orchestrator                               │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │              LangGraph ReAct Agent                       │   │
+│  │  ┌─────────────┐ ┌─────────────┐ ┌─────────────────┐   │   │
+│  │  │ execute_sql │ │  lookup_    │ │ search_documents│   │   │
+│  │  │             │ │  equipment  │ │                 │   │   │
+│  │  └──────┬──────┘ └──────┬──────┘ └────────┬────────┘   │   │
+│  └─────────┼───────────────┼─────────────────┼────────────┘   │
+└────────────┼───────────────┼─────────────────┼────────────────┘
+             │               │                 │
+             ▼               ▼                 ▼
+┌────────────────┐  ┌──────────────┐  ┌──────────────────┐
+│   PostgreSQL   │  │    Redis     │  │     Pinecone     │
+│  ┌──────────┐  │  │ ┌──────────┐ │  │  ┌────────────┐  │
+│  │ 2,400+   │  │  │ │ Session  │ │  │  │ Equipment  │  │
+│  │Equipment │  │  │ │ History  │ │  │  │  Manuals   │  │
+│  │ Records  │  │  │ └──────────┘ │  │  └────────────┘  │
+│  └──────────┘  │  └──────────────┘  └──────────────────┘
+└────────────────┘
 ```
 
 ---
 
-## Architecture (high-level)
+## Key Features
 
-```text
-Microsoft Teams
-  |
-  v
-Bot Framework (Azure)
-  |  POST /api/messages
-  v
-FastAPI (app.py)
-  |
-  v
-Unified Agent (rag/unified_agent.py)
-  |-- execute_sql         -> PostgreSQL (equipment_matrix)
-  |-- semantic_search     -> Pinecone (documents/machinery)
-  `-- web_search (opt.)   -> Tavily
-```
+### Autonomous AI Agent
+Built on **LangGraph's ReAct pattern**, the agent autonomously decides which tools to use based on query context. No rigid decision trees — the LLM naturally reasons about whether to query the database, search documents, or look up specific equipment.
 
-The unified agent does (typically) **one tool round** + **one answer round** to keep latency low while preserving accuracy.
+### Hybrid Data Retrieval
+Combines structured PostgreSQL queries with semantic Pinecone search. Equipment specs come from the database; operating manuals and technical guides come from vector search. Results are synthesized into coherent German responses.
 
----
+### Conversation Intelligence
+Redis-backed per-user conversation history enables natural follow-ups:
+> **User:** "Zeige Kettenfertiger mit 3m Einbaubreite"
+> **Bot:** *Returns 5 machines*
+> **User:** "Welche davon sind zur Miete?"
+> **Bot:** *Filters previous results by rental status*
 
-## Conversation & follow-ups
+### Security-First SQL
+Every query passes through validation:
+- Only SELECT statements allowed
+- Dangerous keywords blocked (DROP, DELETE, ALTER)
+- Results limited to 50 rows
+- Identifier validation prevents injection
 
-- Threads are isolated by `thread_key = "{user_id}:{conversation_id}"` (safe in group chats).
-- Redis stores conversation state with TTL (`CONVERSATION_TTL_HOURS`):
-  - `history:{thread_key}`: unified-agent chat history (for follow-ups)
-  - `conversation:{thread_key}`: Responses API continuity (fallback mode only)
-
-**Reset**
-- In Teams: send `/reset` (or `/zuruecksetzen`)
-- Or via API: `POST /api/reset-conversation` with `{ "thread_key": "..." }` or `{}` for all
+### Provider Flexibility
+Swap between **OpenAI**, **Cerebras**, or **Groq** via environment variables. Supports reasoning models (o1/o3) with automatic parameter handling.
 
 ---
 
-## Configuration notes
+## Tech Stack
 
-All config is via environment variables (`.env.example`).
-
-Useful toggles:
-
-```env
-# Use the internal RAG system (recommended)
-USE_CUSTOM_RAG=true
-USE_SINGLE_AGENT=true
-
-# Improve follow-up understanding + paraphrase retrieval
-UNIFIED_AGENT_ENABLE_QUERY_REWRITE=true
-UNIFIED_AGENT_MULTI_QUERY_RETRIEVAL=true
-UNIFIED_AGENT_MULTI_QUERY_MAX=3
-```
+| Layer | Technology |
+|-------|------------|
+| **API Framework** | FastAPI with async/await |
+| **Agent Framework** | LangGraph ReAct |
+| **LLM Providers** | OpenAI GPT-4o, Groq Llama 4, Cerebras |
+| **Structured Data** | PostgreSQL with connection pooling |
+| **Vector Search** | Pinecone + text-embedding-3-large |
+| **Session State** | Redis with 24-hour TTL |
+| **Bot Platform** | Microsoft Bot Framework |
+| **Monitoring** | Flask Admin Dashboard |
 
 ---
 
-## Deployment (Cloud Run)
+## Technical Highlights
 
-```bash
-gcloud run deploy teams-bot \
-  --source . \
-  --region us-central1 \
-  --allow-unauthenticated
-```
+**German Number Handling**
+Equipment specs use German decimal notation (1,5m). The system automatically handles CAST/REPLACE conversions for numeric comparisons in SQL.
 
-Set environment variables (example):
+**Concurrent Search**
+Parallel Pinecone namespace queries using asyncio.gather() — documents and machinery data searched simultaneously.
 
-```bash
-gcloud run services update teams-bot \
-  --region us-central1 \
-  --set-env-vars="OPENAI_MODEL=gpt-5,REASONING_EFFORT=medium,USE_CUSTOM_RAG=true,USE_SINGLE_AGENT=true"
-```
+**Graceful Degradation**
+If LangGraph fails → fallback to simplified agent → fallback to direct Pinecone search. The system always responds.
 
-> Recommended: store secrets in Secret Manager and reference them from Cloud Run instead of pasting keys into CLI history.
+**Real-time UX**
+Continuous typing indicators every 2.5 seconds keep Teams showing "Bot is typing..." during long reasoning operations.
+
+**Thread Isolation**
+Unique thread keys (`{user_id}:{conversation_id}`) prevent conversation bleed in group chats.
 
 ---
 
-## Testing
+## Project Structure
 
-Most tests are **live-service** checks and require environment variables (`.env`) for OpenAI/Pinecone/Postgres (and optionally Redis). For deterministic checks, use the quality guard unit tests and evaluation harness.
-
-```bash
-python -m unittest tests/test_quality_guards.py
-python tests/eval_harness.py --cases tests/qa_cases.json --results tests/sample_results.json
+```
+teams-bot-dev/
+├── app.py                 # FastAPI entry point, Teams webhook
+├── cli_tester.py          # Local testing without Teams
+├── rag/
+│   ├── langgraph_agent.py # LangGraph ReAct agent with tools
+│   ├── search.py          # RAG orchestrator
+│   ├── postgres.py        # SQL safety wrapper
+│   ├── vector_store.py    # Pinecone integration
+│   ├── schema_linker.py   # Semantic column resolution
+│   └── config.py          # Centralized configuration
+└── admin_dashboard/       # Flask monitoring UI
 ```
 
 ---
 
-## Endpoints
+## Sample Interaction
 
-| Method | Endpoint | Purpose |
-|---:|---|---|
-| `GET` | `/` | Liveness |
-| `GET` | `/health` | Health + Redis status |
-| `POST` | `/api/messages` | Teams webhook (Bot Framework) |
-| `POST` | `/api/reset-conversation` | Reset thread/all history |
+```
+User: Wie viele Bomag Walzen haben wir?
 
----
+Agent: [Calling execute_sql]
+       SELECT COUNT(*) FROM equipment_matrix
+       WHERE hersteller_name ILIKE '%bomag%'
+       AND geraetegruppe_name ILIKE '%walze%'
 
-## Repo layout
+Bot:  Wir haben 47 Bomag Walzen im Bestand.
+      Davon sind 32 zur Miete und 15 zum Verkauf verfügbar.
 
-```text
-app.py                 FastAPI app + Teams webhook
-commands.py            Slash-command handlers (Teams)
-cli_test.py            Local interactive runner (no Teams)
-rag/                   Unified agent + retrieval + SQL tooling
-scripts/               Ingestion / indexing utilities
-tests/                 Live-service regression scripts (LLM-driven)
+      Möchten Sie Details zu bestimmten Modellen?
 ```
 
 ---
 
-## Security
+<div align="center">
 
-- Never commit secrets: keep `.env` local and use `.env.example` as a template.
-- Prefer Secret Manager for production credentials (Cloud Run).
+**Built with modern AI engineering practices**
 
----
+*LangGraph Agents • RAG Architecture • Production-Grade Error Handling*
 
-## License
-
-MIT. See `LICENSE`.
+</div>

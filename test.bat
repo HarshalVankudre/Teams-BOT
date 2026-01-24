@@ -15,6 +15,10 @@ set "RESET=%ESC%[0m"
 set "SCRIPT_DIR=%~dp0"
 cd /d "%SCRIPT_DIR%"
 
+:: Use LangGraph as default, disable fallback agent
+set "USE_LANGGRAPH_AGENT=true"
+set "USE_AGENT_SYSTEM=false"
+
 if "%1"=="" goto interactive
 
 :: Commands
@@ -22,6 +26,8 @@ if "%1"=="/help" goto help
 if "%1"=="/h" goto help
 if "%1"=="/?" goto help
 if "%1"=="/i" goto interactive
+if "%1"=="/v" goto verbose_query
+if "%1"=="/verbose" goto verbose_query
 if "%1"=="/sql" goto sql
 if "%1"=="/search" goto search
 if "%1"=="/s" goto search
@@ -52,6 +58,17 @@ echo.
 echo %YELLOW%Query:%RESET% %QUERY%
 echo.
 python cli_tester.py "%QUERY%"
+goto end
+
+:verbose_query
+:: Shift to get the query after /v
+shift
+set "QUERY=%1 %2 %3 %4 %5 %6 %7 %8 %9"
+echo.
+echo %CYAN%[Verbose Mode]%RESET%
+echo %YELLOW%Query:%RESET% %QUERY%
+echo.
+python cli_tester.py -v "%QUERY%"
 goto end
 
 :sql
@@ -102,7 +119,6 @@ echo %CYAN%============================================================%RESET%
 echo.
 echo %YELLOW%Testing LangGraph agent with sample query...%RESET%
 echo.
-set "USE_LANGGRAPH_AGENT=true"
 if "%2"=="" (
     python cli_tester.py "Wie viele Kettenfertiger haben wir?"
 ) else (
@@ -119,6 +135,7 @@ echo.
 echo %YELLOW%Testing with LangGraph DISABLED...%RESET%
 echo.
 set "USE_LANGGRAPH_AGENT=false"
+set "USE_AGENT_SYSTEM=true"
 if "%2"=="" (
     python cli_tester.py "Wie viele Kettenfertiger haben wir?"
 ) else (
@@ -146,6 +163,7 @@ echo.
 echo %BOLD%Commands:%RESET%
 echo   %GREEN%/help%RESET%           Show this help
 echo   %GREEN%/i%RESET%              Interactive mode
+echo   %GREEN%/v "query"%RESET%      Verbose mode - shows tool calls and details
 echo   %GREEN%/sql "query"%RESET%    Direct SQL query
 echo   %GREEN%/search "text"%RESET%  Document search (Pinecone)
 echo   %GREEN%/stats%RESET%          Database statistics
@@ -160,6 +178,7 @@ echo   %GREEN%/validate%RESET%       Validate LangGraph migration
 echo.
 echo %BOLD%Examples:%RESET%
 echo   %YELLOW%test Wie viele Bomag Maschinen haben wir?%RESET%
+echo   %YELLOW%test /v Was ist besser - Bomag oder Hamm?%RESET%  (verbose with tools)
 echo   %YELLOW%test /sql "SELECT COUNT(*) FROM sema_matrix.equipment_matrix"%RESET%
 echo   %YELLOW%test /search "Anleitung Kaltfraese"%RESET%
 echo   %YELLOW%test /lg "Zeige alle Voegele Kettenfertiger"%RESET%

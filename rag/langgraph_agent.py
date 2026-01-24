@@ -1,4 +1,4 @@
-"""LangGraph ReAct agent for RÜKO equipment queries."""
+"""LangGraph ReAct agent for RÜKO equipment queries - V2 with improved numeric handling."""
 
 import re
 import time
@@ -11,19 +11,26 @@ from langchain_core.tools import tool
 
 from rag.config import config
 
-# Verbose logging flag from config
+# Verbose logging flag
 VERBOSE = config.agent_verbose if hasattr(config, "agent_verbose") else False
 
 from rag.postgres import PostgresService
 from rag.vector_store import PineconeStore
-from rag.schema_linker import SchemaLinker
 
 logger = logging.getLogger(__name__)
 
-# Initialize services (singleton pattern matches existing codebase)
+# Table name - using optimized materialized view
+EQUIPMENT_TABLE = "public.equipment_matrix_v2"
+
+# Initialize services (singleton pattern)
 _postgres: Optional[PostgresService] = None
 _pinecone: Optional[PineconeStore] = None
-_schema_linker: Optional[SchemaLinker] = None
+
+
+def set_shared_postgres(postgres: PostgresService):
+    """Set a shared PostgresService instance."""
+    global _postgres
+    _postgres = postgres
 
 
 def _get_postgres() -> PostgresService:
@@ -33,6 +40,12 @@ def _get_postgres() -> PostgresService:
     return _postgres
 
 
+def set_shared_pinecone(pinecone: PineconeStore):
+    """Set a shared PineconeStore instance."""
+    global _pinecone
+    _pinecone = pinecone
+
+
 def _get_pinecone() -> PineconeStore:
     global _pinecone
     if _pinecone is None:
@@ -40,22 +53,23 @@ def _get_pinecone() -> PineconeStore:
     return _pinecone
 
 
-def _get_schema_linker() -> SchemaLinker:
-    global _schema_linker
-    if _schema_linker is None:
-        _schema_linker = SchemaLinker()
-    return _schema_linker
-
+# =============================================================================
+# Tools
+# =============================================================================
 
 @tool
 def execute_sql(sql: str, purpose: str) -> dict:
     """Execute a read-only SQL query against the equipment database.
 
-    Use this tool to query sema_matrix.equipment_matrix for equipment data.
+    Use this tool to query public.equipment_matrix_v2 for equipment data.
     Only SELECT queries are allowed. Results limited to 50 rows.
+    
+    IMPORTANT: For text comparisons, ALWAYS use ILIKE with wildcards:
+    ✅ WHERE hersteller_name ILIKE '%bomag%'
+    ❌ WHERE hersteller_name = 'BOMAG'
 
     Args:
-        sql: The SELECT query to execute. Use proper German column names.
+        sql: The SELECT query to execute.
         purpose: Brief description of what this query is for.
 
     Returns:
@@ -63,25 +77,204 @@ def execute_sql(sql: str, purpose: str) -> dict:
     """
     postgres = _get_postgres()
 
+    # DEBUG: Print the SQL being executed
+    print(f"\n{'='*60}")
+    print(f"🔍 EXECUTE_SQL CALLED")
+    print(f"📝 Purpose: {purpose}")
+    print(f"📄 SQL Query:\n{sql}")
+    print(f"{'='*60}\n")
+    logger.info(f"SQL Query: {sql}")
+
     # Validate and prepare SQL
     prepared, error = postgres.prepare_readonly_sql(sql)
     if error:
+        print(f"❌ SQL Preparation Error: {error}")
+        logger.error(f"SQL preparation error: {error}")
         return {"error": error, "sql": sql}
 
     try:
         results = postgres.execute_query(prepared)
         result_ids = [r.get("id") for r in results if r.get("id")]
 
+        # DEBUG: Print results summary
+        print(f"✅ Query returned {len(results)} rows")
+        if results:
+            print(f"📊 First result: {results[0]}")
+        logger.info(f"SQL returned {len(results)} rows")
+
         return {
             "purpose": purpose,
             "sql": prepared,
             "row_count": len(results),
             "results": results[:50],
-            "result_ids": result_ids[:100]  # Store for follow-ups
+            "result_ids": result_ids[:100]
         }
     except Exception as e:
+        print(f"❌ SQL Execution Error: {e}")
         logger.error(f"SQL execution error: {e}")
         return {"error": str(e), "sql": prepared}
+
+
+@tool
+def query_equipment(
+    category: str = None,
+    manufacturer: str = None,
+    property_column: str = None,
+    property_operator: str = None,
+    property_value: str = None,
+    property_column_2: str = None,
+    property_operator_2: str = None,
+    property_value_2: str = None,
+    usage_type: str = None,
+    limit: int = 20
+) -> dict:
+    """Query equipment with filters.
+    
+    Args:
+        category: Equipment category (e.g., 'Fertiger', 'Bagger', 'Fräse', 'Walze')
+        manufacturer: Manufacturer filter (e.g., 'Bomag', 'Liebherr', 'Voegele')
+        property_column: Column for filter. Use *_num columns for numeric, prop_* for text/boolean
+        property_operator: Comparison: '>=', '<=', '>', '<', '=' (use '=' for text)
+        property_value: Value - number for *_num columns, text for prop_* (e.g., "Ja", "Nein")
+        property_column_2: Second filter column (optional)
+        property_operator_2: Second operator (optional)
+        property_value_2: Second value (optional)
+        usage_type: 'MIET' (rental) or 'VK' (sale)
+        limit: Max results (default 20, max 50)
+    
+    Returns:
+        Dict with matching equipment.
+    """
+    postgres = _get_postgres()
+    
+    print(f"\n{'='*60}")
+    print(f"🔧 QUERY_EQUIPMENT CALLED")
+    print(f"  category: {category}")
+    print(f"  manufacturer: {manufacturer}")
+    print(f"  property_column: {property_column}")
+    print(f"  property_operator: {property_operator}")
+    print(f"  property_value: {property_value}")
+    if property_column_2:
+        print(f"  property_column_2: {property_column_2}")
+        print(f"  property_operator_2: {property_operator_2}")
+        print(f"  property_value_2: {property_value_2}")
+    print(f"  usage_type: {usage_type}")
+    print(f"{'='*60}\n")
+    
+    # Build WHERE clauses
+    where_clauses = []
+    
+    if category:
+        where_clauses.append(f"geraetegruppe_name ILIKE '%{category}%'")
+    
+    if manufacturer:
+        where_clauses.append(f"hersteller_name ILIKE '%{manufacturer}%'")
+    
+    if usage_type:
+        where_clauses.append(f"verwendung_code = '{usage_type}'")
+    
+    # Helper to add property filter
+    def add_filter(col, op, val):
+        if not col or not op or val is None:
+            return
+        if op not in ('>=', '<=', '>', '<', '='):
+            return
+        
+        # Check if numeric column (*_num) or text column (prop_*)
+        if col.endswith('_num'):
+            # Numeric - use value directly
+            where_clauses.append(f"{col} {op} {val}")
+            print(f"⚡ Numeric filter: {col} {op} {val}")
+        else:
+            # Text/Boolean - quote the value
+            where_clauses.append(f"\"{col}\" = '{val}'")
+            print(f"⚡ Text filter: {col} = '{val}'")
+    
+    add_filter(property_column, property_operator, property_value)
+    add_filter(property_column_2, property_operator_2, property_value_2)
+    
+    # Build query
+    limit = min(limit, 50)
+    where_sql = " AND ".join(where_clauses) if where_clauses else "TRUE"
+    
+    sql = f"""
+        SELECT id, bezeichnung, hersteller_name, geraetegruppe_name, verwendung_code
+        FROM {EQUIPMENT_TABLE}
+        WHERE {where_sql}
+        LIMIT {limit}
+    """
+    
+    print(f"📄 SQL:\n{sql}")
+    
+    try:
+        results = postgres.execute_query(sql)
+        print(f"✅ {len(results)} rows")
+        return {"row_count": len(results), "results": results, "sql": sql.strip()}
+    except Exception as e:
+        print(f"❌ Error: {e}")
+        return {"error": str(e), "sql": sql}
+
+
+@tool
+def lookup_equipment(search_term: str, include_fields: str = "all") -> dict:
+    """Look up specific equipment by name, model, or serial number.
+    
+    Use this when the user asks about a SPECIFIC machine by name.
+    
+    Args:
+        search_term: Machine name, model, or serial number to search for
+                     (e.g., "Super 800i", "R 926", "Liebherr A 914")
+        include_fields: Which fields to return:
+                       - "basic": id, bezeichnung, hersteller_name, seriennummer
+                       - "all": all core fields including inventarnummer, verwendung, etc.
+    
+    Returns:
+        Dict with matching equipment details including serial numbers.
+    
+    Example:
+        lookup_equipment("Super 800i") → Returns all Super 800i machines with serial numbers
+    """
+    postgres = _get_postgres()
+    
+    print(f"\n{'='*60}")
+    print(f"🔍 LOOKUP_EQUIPMENT: '{search_term}'")
+    print(f"{'='*60}\n")
+    
+    # Determine which fields to select
+    if include_fields == "basic":
+        fields = "id, bezeichnung, hersteller_name, seriennummer, geraetegruppe_name"
+    else:
+        fields = """id, bezeichnung, hersteller_name, seriennummer, inventarnummer, 
+                    geraetegruppe_name, verwendung_code, nuclos_state"""
+    
+    # Build search query - search in bezeichnung, seriennummer, and inventarnummer
+    sql = f"""
+        SELECT {fields}
+        FROM {EQUIPMENT_TABLE}
+        WHERE bezeichnung ILIKE '%{search_term}%'
+           OR seriennummer ILIKE '%{search_term}%'
+           OR inventarnummer ILIKE '%{search_term}%'
+        LIMIT 20
+    """
+    
+    print(f"📄 SQL:\n{sql}")
+    
+    try:
+        results = postgres.execute_query(sql)
+        
+        print(f"✅ Found {len(results)} machines matching '{search_term}'")
+        if results:
+            print(f"📊 First result: {results[0]}")
+        
+        return {
+            "search_term": search_term,
+            "found": len(results),
+            "machines": results
+        }
+    except Exception as e:
+        print(f"❌ Lookup error: {e}")
+        logger.error(f"Lookup equipment error: {e}")
+        return {"error": str(e), "search_term": search_term}
 
 
 @tool
@@ -101,6 +294,8 @@ async def search_documents(query: str, top_k: int = 10) -> dict:
     pinecone = _get_pinecone()
     top_k = min(top_k, 20)
 
+    print(f"\n🔎 SEARCH_DOCUMENTS: '{query}' (top_k={top_k})")
+
     try:
         results = await pinecone.search(query, top_k=top_k)
 
@@ -113,52 +308,16 @@ async def search_documents(query: str, top_k: int = 10) -> dict:
                 "score": r.get("score", 0)
             })
 
+        print(f"✅ Found {len(matches)} document matches")
         return {
             "query": query,
             "match_count": len(matches),
             "matches": matches
         }
     except Exception as e:
+        print(f"❌ Document search error: {e}")
         logger.error(f"Document search error: {e}")
         return {"error": str(e), "query": query}
-
-
-@tool
-def find_columns(keyword: str) -> dict:
-    """Find relevant database columns by semantic search.
-
-    Use this when you need to find the correct column name for a property
-    like width, weight, power, etc. Returns matching column names with units.
-
-    Args:
-        keyword: German keyword like 'breite' (width), 'gewicht' (weight),
-                'leistung' (power), 'tiefe' (depth)
-
-    Returns:
-        Dict with matching columns including column_name, display_name, and unit.
-    """
-    schema_linker = _get_schema_linker()
-
-    try:
-        reduced_schema = schema_linker.get_reduced_schema(keyword, top_k=15)
-
-        columns = []
-        for col_id, col_info in reduced_schema.column_info.items():
-            columns.append({
-                "column_name": col_info.column_name,
-                "display_name": col_info.display_name,
-                "unit": col_info.unit or "",
-                "description": col_info.description or ""
-            })
-
-        return {
-            "keyword": keyword,
-            "found": len(columns),
-            "columns": columns
-        }
-    except Exception as e:
-        logger.error(f"Column search error: {e}")
-        return {"error": str(e), "keyword": keyword}
 
 
 @tool
@@ -176,13 +335,16 @@ def explore_column(column_name: str) -> dict:
     """
     postgres = _get_postgres()
 
+    print(f"\n🔎 EXPLORE_COLUMN: '{column_name}'")
+
     # Validate column name format (PostgreSQL identifier)
     if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', column_name):
+        print(f"❌ Invalid column name: {column_name}")
         return {"error": f"Invalid column name: {column_name}"}
 
     sql = f"""
         SELECT DISTINCT "{column_name}"
-        FROM sema_matrix.equipment_matrix
+        FROM {EQUIPMENT_TABLE}
         WHERE "{column_name}" IS NOT NULL
         ORDER BY "{column_name}"
         LIMIT 50
@@ -192,41 +354,155 @@ def explore_column(column_name: str) -> dict:
         results = postgres.execute_query(sql)
         values = [r.get(column_name) for r in results if r.get(column_name)]
 
+        print(f"✅ Found {len(values)} distinct values")
         return {
             "column": column_name,
             "distinct_count": len(values),
             "values": values
         }
     except Exception as e:
+        print(f"❌ Column exploration error: {e}")
         logger.error(f"Column exploration error: {e}")
         return {"error": str(e), "column": column_name}
 
 
-# System prompt for the ReAct agent
+# =============================================================================
+# System Prompt - Simplified with tool-based approach
+# =============================================================================
+
 SYSTEM_PROMPT = """Du bist der RÜKO Baumaschinen-Assistent.
 
-DATENBANK-INFORMATIONEN:
-- Tabelle: sema_matrix.equipment_matrix (~2400 Maschinen)
-- Kategorien (geraetegruppe_name): Kettenfertiger, Radfertiger, Kettenbagger, Mobilbagger, Radlader, etc.
-- Hersteller (hersteller_name): Voegele, Bomag, Caterpillar, Liebherr, etc.
-- verwendung_code: 'MIET' (Vermietung), 'VK' (Verkauf)
-- Zahlenformat: Komma als Dezimaltrennzeichen (z.B. "3,5" = 3.5)
-- Für numerische Vergleiche: CAST(NULLIF(REPLACE(regexp_replace(col, '[^0-9,]', '', 'g'), ',', '.'), '') AS NUMERIC)
+DATENBANK: public.equipment_matrix_v2 (~2400 Maschinen)
 
+═══════════════════════════════════════════════════════════════
+KERN-SPALTEN:
+═══════════════════════════════════════════════════════════════
+id, bezeichnung, seriennummer, inventarnummer, hersteller_name,
+geraetegruppe_name, verwendung_code ('MIET'/'VK'), nuclos_state,
+nuclos_process, kostenstelle, equipment_key
+
+═══════════════════════════════════════════════════════════════
+NUMERISCHE FILTER-SPALTEN (*_num) - für WHERE-Bedingungen:
+═══════════════════════════════════════════════════════════════
+arbeitsbreite_mm_num, breite_mm_num, einbaubreite_grundbohle_m_num,
+einbaubreite_max_m_num (FERTIGER!), einbaubreite_verbreiterungen_m_num,
+fraesbreite_mm_num (FRÄSEN!), fraestiefe_mm_num, gewicht_kg_num,
+grabtiefe_mm_num (BAGGER!), hoehe_mm_num, hubhoehe_mm_num, laenge_mm_num,
+loeffelstiel_mm_num, motor_leistung_kw_num, nutzlast_kg_num,
+schnittbreite_mm_num, schnitttiefe_mm_num, tragkraft_max_kg_num,
+tragkraft_spitze_kg_num
+
+═══════════════════════════════════════════════════════════════
+ALLE EIGENSCHAFTS-SPALTEN (prop_*):
+═══════════════════════════════════════════════════════════════
+prop_e1010_1_achser, prop_e1020_2_achser, prop_e1030_3_achser,
+prop_e1040_4_achser, prop_e1050_abb_arbeitsbereichsbegrenzung,
+prop_e1070_abgasstufe_eu, prop_e1080_abgasstufe_usa, prop_e1090_absauganlage,
+prop_e1100_absauganlage_vcs, prop_e1110_allradantrieb, prop_e1120_allradlenkung,
+prop_e1130_anzahl_zaehne, prop_e1150_arbeitsbreite_mm, prop_e1160_arbeitsdruck_bar,
+prop_e1170_arbeitshoehe_m, prop_e1180_asphaltmanager, prop_e1200_aufgabe_mm,
+prop_e1210_ausladung_m, prop_e1220_ausleger_m, prop_e1230_backenbrecher,
+prop_e1240_ballast_t, prop_e1250_bandbreite_mm, prop_e1270_bio_hydraulikoel,
+prop_e1280_bodenplatten_mm, prop_e1320_brechkraft_t, prop_e1330_breite_mm,
+prop_e1340_dachprofilverstellung, prop_e1360_dauerleistung_kva,
+prop_e1370_dieselmotor, prop_e1380_dieselpartikelfilter,
+prop_e1390_distanzkontrolle_automatisch, prop_e1400_drehbar, prop_e1430_druck_bar,
+prop_e1450_durchsatzmenge_t_h, prop_e1460_e_heizung,
+prop_e1470_einbaubreite_grundbohle_m, prop_e1480_einbaubreite_max_m,
+prop_e1490_einbaubreite_mit_verbreiterungen_m, prop_e1510_elektrostarter,
+prop_e1530_fahrgeschwindigkeit_km_h, prop_e1540_fcs_flexible_cutter_system,
+prop_e1570_foerderhoehe_m, prop_e1580_foerderkapazitaet_t_h,
+prop_e1590_foerderlaenge_m, prop_e1610_fraesbreite_mm,
+prop_e1620_fraesmeissel_anzahl, prop_e1630_fraestiefe_mm, prop_e1650_frequenz_hz,
+prop_e1660_frontschild_mm, prop_e1670_funkfernsteuerung,
+prop_e1680_gabelaufnahme_beschickerkuebel, prop_e1690_gas_heizung,
+prop_e1700_gegengewicht_t, prop_e1720_geteilte_bandage, prop_e1730_gewicht_kg,
+prop_e1740_grabtiefe_mm, prop_e1750_greiferdreheinrichtung,
+prop_e1760_greiferhydraulik, prop_e1770_hakenhoehe_m, prop_e1780_hammerhydraulik,
+prop_e1830_hochdruckreiniger, prop_e1840_hochfahrbare_kabine, prop_e1860_hoehe_mm,
+prop_e1870_hubhoehe_mm, prop_e1880_inhalt_m3, prop_e1890_kabine,
+prop_e1900_kantenschneidgeraet_stueck, prop_e1920_klappschild,
+prop_e1930_klimaanlage, prop_e1940_knicklenkung, prop_e1960_koernung_mm,
+prop_e1970_kreiselbrecher, prop_e1990_laenge_mm, prop_e2000_laufzeit_h,
+prop_e2010_leistung_kva, prop_e2020_leistungsaufnahme_kw, prop_e2030_level_pro,
+prop_e2040_loeffelstiel_mm, prop_e2080_mittelschar_mm, prop_e2100_mobil_kette,
+prop_e2110_mobil_rad, prop_e2120_mobil_semi, prop_e2130_monoausleger,
+prop_e2140_motor_benzin, prop_e2150_motor_diesel, prop_e2160_motor_elektro,
+prop_e2170_motor_hersteller, prop_e2180_motor_leistung_kw, prop_e2190_motor_typ,
+prop_e2200_muldenerhoehung, prop_e2210_muldenheizung, prop_e2220_muldenvolumen_m3,
+prop_e2230_nennspannung_v, prop_e2240_nennstrom_a, prop_e2250_nutzlast_kg,
+prop_e2260_oszillation, prop_e2270_pat_schild_mm, prop_e2280_plattformhoehe_mm,
+prop_e2300_powertilt, prop_e2310_prallmuehle, prop_e2320_pratzenabstuetzung,
+prop_e2340_rampen_hydraulisch, prop_e2350_rampen_mechanisch,
+prop_e2370_reversierbar, prop_e2390_schaufelvolumen_m3, prop_e2400_scherenhydraulik,
+prop_e2420_schildabstuetzung, prop_e2430_schnellgang, prop_e2440_schnellwechsler_typ,
+prop_e2450_schnellwechsler_henle, prop_e2460_schnellwechsler_hydr,
+prop_e2470_schnellwechsler_mech, prop_e2480_schnellwechsler_oilquick,
+prop_e2490_schnittbreite_mm, prop_e2510_schnittlaenge_mm, prop_e2520_schnitttiefe_mm,
+prop_e2530_schuetthoehe_mm, prop_e2540_schutzklasse_ip, prop_e2550_schwenkband,
+prop_e2560_seitenknickausleger, prop_e2580_s_schild_mm, prop_e2590_starres_band,
+prop_e2610_steigfaehigkeit_ohne_vibration, prop_e2615_steigfaehigkeit_mit_vibration,
+prop_e2620_su_schild_mm, prop_e2640_teleskopausleger,
+prop_e2650_temperaturmessung_asphalt, prop_e2670_tiltrotator,
+prop_e2680_traegergeraet_typ, prop_e2700_tragkraft_an_der_spitze_kg,
+prop_e2710_tragkraft_max_kg, prop_e2760_truck_assist, prop_e2770_turmsystem_typ,
+prop_e2780_u_schild_mm, prop_e2790_verdichtungsleistung_kg,
+prop_e2800_verdichtungsmesser, prop_e2810_verstellausleger,
+prop_e2820_vor_und_ruecklauf, prop_e2830_vorlauf, prop_e2840_vorruestung_2d_steuerung,
+prop_e2850_vorruestung_3d_steuerung, prop_e2860_walzendrehvorrichtung,
+prop_e2900_wechselhaltersystem_typ, prop_e2910_wegmessesensoren_zylinder,
+prop_e2920_wetterschutzdach, prop_e2930_winde_typ, prop_e2940_zahntyp,
+prop_e2950_zentralschmierung, prop_e2970_bohle_typ,
+prop_e2980_rotationsgeschwindigkeit_u_min, prop_e2990_durchflussmenge_l_min,
+prop_e3000_einbaustaerke_mm, prop_e3010_zul_reisskraft_knm,
+prop_e3020_empf_baggerklasse_t, prop_e3030_vm_38_schnittstelle,
+prop_e3040_vorruestung_navitronic, prop_e3050_drehmulde, prop_e3060_vorruestung_voelkel,
+prop_e3070_einbau_von_hgt_schotter, prop_e3080_fuehrerscheinklasse,
+prop_e3090_stuetzlast_kg, prop_e3100_streben_stege, prop_e3110_farbe,
+prop_e3120_getriebe_typ, prop_e3130_getriebe_art, prop_e3150_reifengroesse,
+prop_e3160_co2_emissionen_g_km, prop_e3170_umweltplakette_de, prop_e3180_splittstreuer,
+prop_e3190_anbauplattenverdichter, prop_e3200_batterie_typ, properties_jsonb
+
+═══════════════════════════════════════════════════════════════
 WERKZEUGE:
-1. execute_sql - SQL-Abfragen für Bestandsdaten
-2. search_documents - Technische Dokumentation durchsuchen
-3. find_columns - Spalten für Eigenschaften finden (Breite, Gewicht, etc.)
-4. explore_column - Mögliche Werte einer Spalte anzeigen
+═══════════════════════════════════════════════════════════════
+1. query_equipment - Hauptwerkzeug für Maschinensuche
+   category, manufacturer, property_column (*_num!), property_operator, property_value
+   
+2. lookup_equipment - Spezifische Maschine nach Name/Seriennummer
 
-WICHTIGE REGELN:
-- Antworte IMMER auf Deutsch
-- Nutze find_columns ZUERST wenn du unsicher über Spaltennamen bist
-- Bei "davon", "diese", "welche" - beziehe dich auf vorherige Ergebnisse
-- Halte Antworten kurz und präzise
-- Liste Maschinen mit: Bezeichnung, Hersteller, relevante Eigenschaften
+3. execute_sql - Direkte SQL (IMMER ILIKE für Text!)
+
+4. search_documents - Technische Dokumentation
+
+5. explore_column - Werte einer Spalte anzeigen
+
+═══════════════════════════════════════════════════════════════
+BEISPIELE:
+═══════════════════════════════════════════════════════════════
+Fertiger 2m Einbaubreite:
+→ query_equipment(category="Fertiger", property_column="einbaubreite_max_m_num", property_operator=">=", property_value=2.0)
+
+Bagger 5m Grabtiefe:
+→ query_equipment(category="Bagger", property_column="grabtiefe_mm_num", property_operator=">=", property_value=5000)
+
+Seriennummer Super 800i:
+→ lookup_equipment("Super 800i")
+
+═══════════════════════════════════════════════════════════════
+REGELN:
+═══════════════════════════════════════════════════════════════
+🔴 Numerische Filter: *_num Spalten verwenden!
+🔴 Einheiten: _mm_num=Millimeter, _m_num=Meter, _kg_num=Kilogramm
+🔴 DU HAST ZUGRIFF! Sage niemals "kein Zugriff"
+
+Antworte auf Deutsch. Kurz und präzise.
 """
 
+
+# =============================================================================
+# Agent Class
+# =============================================================================
 
 @dataclass
 class AgentResult:
@@ -242,58 +518,46 @@ class LangGraphAgent:
     """LangGraph ReAct agent for equipment queries."""
 
     def __init__(self, redis_url: Optional[str] = None):
-        """Initialize the LangGraph agent.
-
-        Args:
-            redis_url: Redis connection URL for checkpointing.
-                      If None, uses in-memory checkpointer.
-        """
+        """Initialize the LangGraph agent."""
         from langgraph.prebuilt import create_react_agent
-        from langchain_openai import ChatOpenAI
 
-        # Initialize LLM
-        self.llm = ChatOpenAI(
-            model=config.openai_model,
-            temperature=0,
-            api_key=config.openai_api_key
-        )
+        # Initialize LLM - prefer Groq if configured, fallback to OpenAI
+        if config.groq_api_key:
+            from langchain_groq import ChatGroq
+            self.llm = ChatGroq(
+                model=config.groq_model,
+                temperature=0,
+                api_key=config.groq_api_key
+            )
+            logger.info(f"LangGraph using Groq model: {config.groq_model}")
+        else:
+            from langchain_openai import ChatOpenAI
+            self.llm = ChatOpenAI(
+                model=config.openai_model,
+                temperature=0,
+                api_key=config.openai_api_key
+            )
+            logger.info(f"LangGraph using OpenAI model: {config.openai_model}")
 
-        # Collect tools
-        self.tools = [execute_sql, search_documents, find_columns, explore_column]
+        # Collect tools - query_equipment is the main one for structured queries
+        self.tools = [
+            query_equipment,
+            lookup_equipment,
+            execute_sql,
+            search_documents,
+            explore_column
+        ]
 
-        # Add web search if enabled
-        if hasattr(config, 'enable_web_search') and config.enable_web_search:
-            try:
-                from langchain_community.tools.tavily_search import TavilySearchResults
-                web_search = TavilySearchResults(
-                    max_results=5,
-                    description="Search the web for current information about equipment, manufacturers, or recommendations."
-                )
-                self.tools.append(web_search)
-            except Exception as e:
-                logger.warning(f"Web search not available: {e}")
-
-        # Set up checkpointer
+        # Set up checkpointer - DISABLED due to LangGraph 1.0.x compatibility issues
+        # Conversation memory will not persist between sessions, but agent will work
         self.checkpointer = None
-        if redis_url:
-            try:
-                from langgraph.checkpoint.redis import RedisSaver
-                self.checkpointer = RedisSaver.from_conn_string(redis_url)
-                logger.info("Using Redis checkpointer for LangGraph")
-            except Exception as e:
-                logger.warning(f"Redis checkpointer failed, using memory: {e}")
+        logger.info("Running without checkpointer (stateless mode)")
 
-        if self.checkpointer is None:
-            from langgraph.checkpoint.memory import MemorySaver
-            self.checkpointer = MemorySaver()
-            logger.info("Using in-memory checkpointer for LangGraph")
-
-        # Create ReAct agent
+        # Create ReAct agent without checkpointer
         self.graph = create_react_agent(
             model=self.llm,
             tools=self.tools,
-            checkpointer=self.checkpointer,
-            state_modifier=SYSTEM_PROMPT
+            prompt=SYSTEM_PROMPT
         )
 
         logger.info(f"LangGraph agent initialized with {len(self.tools)} tools")
@@ -304,17 +568,13 @@ class LangGraphAgent:
         thread_key: str,
         conversation_history: Optional[List[dict]] = None
     ) -> AgentResult:
-        """Process a user query through the ReAct agent.
-
-        Args:
-            user_query: The user's question in German
-            thread_key: Unique thread identifier for state persistence
-            conversation_history: Optional prior messages (used if no checkpoint exists)
-
-        Returns:
-            AgentResult with response and metadata
-        """
+        """Process a user query through the ReAct agent."""
         start_time = time.time()
+
+        print(f"\n{'='*60}")
+        print(f"🤖 LANGGRAPH PROCESSING: {user_query}")
+        print(f"🧵 Thread: {thread_key}")
+        print(f"{'='*60}\n")
 
         if VERBOSE:
             logger.info(f"LangGraph processing query: {user_query[:100]}...")
@@ -363,6 +623,12 @@ class LangGraphAgent:
 
             execution_time = int((time.time() - start_time) * 1000)
 
+            print(f"\n{'='*60}")
+            print(f"✅ RESPONSE READY ({execution_time}ms)")
+            print(f"🔧 Tools used: {tools_used}")
+            print(f"📝 Response: {response[:200]}...")
+            print(f"{'='*60}\n")
+
             return AgentResult(
                 response=response,
                 tools_used=tools_used,
@@ -370,6 +636,7 @@ class LangGraphAgent:
             )
 
         except Exception as e:
+            print(f"\n❌ LANGGRAPH ERROR: {e}\n")
             logger.error(f"LangGraph agent error: {e}", exc_info=True)
             raise
 

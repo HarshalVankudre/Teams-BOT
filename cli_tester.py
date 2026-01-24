@@ -132,12 +132,17 @@ class TestRunner:
         print(f"\n{Colors.BOLD}Initializing Test Environment{Colors.RESET}")
         print("-" * 50)
         
-        self.config = self.postgres = self.pinecone = self.agent = None
+        self.config = self.postgres = self.pinecone = self.agent = self.langgraph_agent = None
         
         try:
             from rag.config import config
             self.config = config
-            print(f"  Config       {Colors.GREEN}OK{Colors.RESET}  Model: {config.response_model}")
+            # Show Groq model if LangGraph is enabled and Groq is configured
+            if config.use_langgraph_agent and config.groq_api_key:
+                model_display = f"{config.groq_model} (Groq)"
+            else:
+                model_display = config.response_model
+            print(f"  Config       {Colors.GREEN}OK{Colors.RESET}  Model: {model_display}")
         except Exception as e:
             print(f"  Config       {Colors.RED}FAIL{Colors.RESET}  {e}")
         
@@ -159,9 +164,34 @@ class TestRunner:
             print(f"  Pinecone     {Colors.YELLOW}WARN{Colors.RESET}  {e}")
         
         try:
-            from rag.single_agent import create_single_agent
-            self.agent = create_single_agent(verbose=False, pinecone_service=self.pinecone)
-            print(f"  Agent        {Colors.GREEN}OK{Colors.RESET}")
+            from rag.config import config
+            # Priority 1: LangGraph agent (if enabled)
+            if config.use_langgraph_agent:
+                try:
+                    # Share postgres/pinecone instances to avoid multiple connection pools
+                    from rag.langgraph_agent import get_langgraph_agent, set_shared_postgres, set_shared_pinecone
+                    if self.postgres:
+                        set_shared_postgres(self.postgres)
+                    if self.pinecone:
+                        set_shared_pinecone(self.pinecone)
+                    self.langgraph_agent = get_langgraph_agent()
+                    print(f"  LangGraph    {Colors.GREEN}OK{Colors.RESET}  (Priority 1)")
+                except Exception as e:
+                    print(f"  LangGraph    {Colors.YELLOW}WARN{Colors.RESET}  {e}")
+                    self.langgraph_agent = None
+            else:
+                self.langgraph_agent = None
+
+            # Priority 2: Clean/Single agent (fallback) - only if USE_AGENT_SYSTEM=true
+            if config.use_agent_system:
+                if config.use_clean_agent:
+                    from rag.single_agent_clean import create_clean_agent
+                    self.agent = create_clean_agent(verbose=self.verbose, pinecone_service=self.pinecone)
+                    print(f"  Agent        {Colors.GREEN}OK{Colors.RESET}  (Fallback)")
+                else:
+                    from rag.single_agent import create_single_agent
+                    self.agent = create_single_agent(verbose=self.verbose, pinecone_service=self.pinecone)
+                    print(f"  Agent        {Colors.GREEN}OK{Colors.RESET}  (Fallback)")
         except Exception as e:
             print(f"  Agent        {Colors.RED}FAIL{Colors.RESET}  {e}")
         
@@ -178,30 +208,50 @@ class TestRunner:
             query=test.query
         )
         
-        if not self.agent:
+        if not self.agent and not getattr(self, 'langgraph_agent', None):
             result.error = "Agent not initialized"
             result.duration_ms = int((time.time() - start) * 1000)
             return result
-        
+
         try:
-            agent_result = await asyncio.wait_for(
-                self.agent.process(
-                    user_query=test.query,
-                    conversation_history=self.conversation_history,
-                    thread_key=self.thread_key
-                ),
-                timeout=test.timeout_ms / 1000
-            )
-            
-            result.duration_ms = agent_result.execution_time_ms
-            result.response = agent_result.response
-            result.tools_used = agent_result.tools_used
-            result.sql_rows = agent_result.sql_results_count
-            # Token usage
-            result.input_tokens = agent_result.input_tokens
-            result.output_tokens = agent_result.output_tokens
-            result.reasoning_tokens = agent_result.reasoning_tokens
-            result.total_tokens = agent_result.total_tokens
+            # Priority 1: Use LangGraph agent if available
+            if getattr(self, 'langgraph_agent', None):
+                agent_result = await asyncio.wait_for(
+                    self.langgraph_agent.process(
+                        user_query=test.query,
+                        thread_key=self.thread_key,
+                        conversation_history=self.conversation_history
+                    ),
+                    timeout=test.timeout_ms / 1000
+                )
+                result.duration_ms = agent_result.execution_time_ms
+                result.response = agent_result.response
+                result.tools_used = agent_result.tools_used
+                result.sql_rows = getattr(agent_result, 'sql_results_count', 0)
+                # LangGraph doesn't provide token counts directly
+                result.input_tokens = 0
+                result.output_tokens = 0
+                result.reasoning_tokens = 0
+                result.total_tokens = 0
+            else:
+                # Priority 2: Use SingleAgent as fallback
+                agent_result = await asyncio.wait_for(
+                    self.agent.process(
+                        user_query=test.query,
+                        conversation_history=self.conversation_history,
+                        thread_key=self.thread_key
+                    ),
+                    timeout=test.timeout_ms / 1000
+                )
+                result.duration_ms = agent_result.execution_time_ms
+                result.response = agent_result.response
+                result.tools_used = agent_result.tools_used
+                result.sql_rows = agent_result.sql_results_count
+                # Token usage
+                result.input_tokens = agent_result.input_tokens
+                result.output_tokens = agent_result.output_tokens
+                result.reasoning_tokens = agent_result.reasoning_tokens
+                result.total_tokens = agent_result.total_tokens
             
             # Run assertions
             assertions_passed = 0
@@ -237,11 +287,16 @@ class TestRunner:
             
             result.assertions_passed = assertions_passed
             result.assertions_failed = assertions_failed
-            result.status = TestStatus.PASSED if assertions_failed == 0 and agent_result.success else TestStatus.FAILED
-            
-            # Update conversation history
-            self.conversation_history.append({"role": "user", "content": test.query})
-            self.conversation_history.append({"role": "assistant", "content": agent_result.response})
+            # LangGraph AgentResult doesn't have success attr - treat valid response as success
+            success = getattr(agent_result, 'success', bool(agent_result.response))
+            result.status = TestStatus.PASSED if assertions_failed == 0 and success else TestStatus.FAILED
+
+            # Update conversation history - but ONLY if we got a valid response
+            # Skip empty/error responses to avoid polluting context
+            bad_responses = ["Keine Antwort verfuegbar", "Ich konnte die Antwort nicht"]
+            if agent_result.response and not any(bad in agent_result.response for bad in bad_responses):
+                self.conversation_history.append({"role": "user", "content": test.query})
+                self.conversation_history.append({"role": "assistant", "content": agent_result.response})
             
         except asyncio.TimeoutError:
             result.error = f"Timeout after {test.timeout_ms}ms"
@@ -283,8 +338,10 @@ class TestRunner:
         """Run all tests in the suite"""
         print(f"\n{Colors.BOLD}Running {len(tests)} tests{Colors.RESET}")
         print("=" * 50)
-        
+
         for i, test in enumerate(tests, 1):
+            # Clear context between tests to avoid follow-up contamination
+            self.clear_context()
             result = await self.run_test(test)
             self.suite.results.append(result)
             self._print_test_result(result, i)
@@ -353,6 +410,13 @@ class TestRunner:
         if result.response:
             print(f"\n{Colors.BOLD}Response:{Colors.RESET}")
             print(result.response)
+
+        # Display tools used
+        if result.tools_used:
+            print(f"\n{Colors.BOLD}Tools Used:{Colors.RESET}")
+            for tool in result.tools_used:
+                icon = "🔍" if tool == "execute_sql" else "📄" if tool == "search_documents" else "🌐" if tool == "search_web" else "📊" if tool == "explore_column" else "🔎" if tool == "find_columns" else "🔧"
+                print(f"  {icon} {tool}")
 
         # Display token usage
         if result.total_tokens > 0:
@@ -475,11 +539,11 @@ def get_default_tests() -> List[TestCase]:
         TestCase(id="sql_filter", name="SQL Filter Query", query="Wie viele Bomag Maschinen?",
                  expected_tools=["execute_sql"], expected_keywords=["bomag", "123"]),
         TestCase(id="sql_category", name="Category Query", query="Zeige alle Kettenfertiger",
-                 expected_tools=["execute_sql"], expected_keywords=["kettenfertiger"]),
+                 expected_tools=["execute_sql"], expected_keywords=["kettenfertiger", "fertiger", "98"]),
         TestCase(id="manufacturer", name="Manufacturer Query", query="Welche Hersteller gibt es?",
                  expected_tools=["execute_sql"]),
         TestCase(id="rental", name="Rental Filter", query="Welche Mietmaschinen haben wir?",
-                 expected_tools=["execute_sql"], expected_keywords=["miet", "vermiet"]),
+                 expected_tools=["execute_sql"], expected_keywords=["miet", "794", "maschinen"]),
     ]
     
     # Load from qa_pairs.json if exists

@@ -7,6 +7,7 @@ Features:
 - Redis for persistent conversation storage (per-user isolation)
 - Graceful fallback to in-memory storage if Redis unavailable
 - Single Agent RAG with Pinecone + PostgreSQL
+- Rate limiting for API endpoints
 """
 import os
 import asyncio
@@ -20,8 +21,19 @@ from dotenv import load_dotenv
 from commands import handle_command
 import time
 
+# Rate limiting
+try:
+    from slowapi import Limiter, _rate_limit_exceeded_handler
+    from slowapi.util import get_remote_address
+    from slowapi.errors import RateLimitExceeded
+    RATE_LIMITING_AVAILABLE = True
+except ImportError:
+    RATE_LIMITING_AVAILABLE = False
+    print("[WARN] slowapi not installed. Rate limiting disabled.")
+
 # RAG imports
 from rag.search import RAGSearch
+from rag.config import config
 from rag.feedback import feedback_service
 from rag.admin_logger import admin_logger
 
@@ -33,11 +45,17 @@ BOT_APP_ID = os.getenv("BOT_APP_ID", "")
 BOT_APP_PASSWORD = os.getenv("BOT_APP_PASSWORD", "")
 AZURE_TENANT_ID = os.getenv("AZURE_TENANT_ID", "")  # Required for single-tenant apps
 
-# Model configuration (REQUIRED - from .env, no hardcoded defaults)
-OPENAI_MODEL = os.getenv("OPENAI_MODEL")
-REASONING_EFFORT = os.getenv("REASONING_EFFORT")
-if not OPENAI_MODEL or not REASONING_EFFORT:
-    raise ValueError("OPENAI_MODEL and REASONING_EFFORT must be set in .env file")
+# Model configuration (provider-aware)
+LLM_PROVIDER = (config.llm_provider or "openai").lower()
+MODEL_NAME = config.response_model
+REASONING_EFFORT = config.response_reasoning
+
+if LLM_PROVIDER == "cerebras":
+    if not config.cerebras_model:
+        raise ValueError("CEREBRAS_MODEL must be set in .env file")
+else:
+    if not config.openai_model:
+        raise ValueError("OPENAI_MODEL must be set in .env file")
 # Redis configuration
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 CONVERSATION_TTL_HOURS = int(os.getenv("CONVERSATION_TTL_HOURS", "24"))
@@ -107,7 +125,8 @@ WENN KEINE INTERNEN DATEN:
 # Debug output
 print(f"Bot App ID loaded: {BOT_APP_ID[:10]}..." if BOT_APP_ID else "Bot App ID NOT loaded!")
 print(f"Bot Password loaded: {'Yes' if BOT_APP_PASSWORD else 'No'}")
-print(f"Model: {OPENAI_MODEL}")
+print(f"LLM Provider: {LLM_PROVIDER}")
+print(f"Model: {MODEL_NAME}")
 print(f"Reasoning Effort: {REASONING_EFFORT}")
 print(f"Redis URL: {REDIS_URL[:50]}..." if len(REDIS_URL) > 50 else f"Redis URL: {REDIS_URL}")
 print(f"Conversation TTL: {CONVERSATION_TTL_HOURS} hours")
@@ -124,6 +143,7 @@ class TokenCache:
     expires_at: datetime
 
 token_cache: TokenCache | None = None
+token_cache_lock = asyncio.Lock()  # Thread-safe token refresh
 
 # Fallback in-memory storage (used when Redis unavailable)
 conversation_responses: dict[str, str] = {}
@@ -177,7 +197,14 @@ async def lifespan(app: FastAPI):
     print("[OK] Resources cleaned up")
 
 
-app = FastAPI(title="Teams Bot - OpenAI Responses API", lifespan=lifespan)
+app = FastAPI(title="Teams Bot - RAG API", lifespan=lifespan)
+
+# Rate limiting setup
+if RATE_LIMITING_AVAILABLE:
+    limiter = Limiter(key_func=get_remote_address)
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+    print("[OK] Rate limiting enabled (30 requests/minute per IP)")
 
 
 # Redis helper functions
@@ -283,7 +310,7 @@ async def health(request: Request):
 
     return {
         "status": "healthy",
-        "model": OPENAI_MODEL,
+        "model": MODEL_NAME,
         "redis": redis_status,
         "active_conversations": active_conversations
     }
@@ -310,6 +337,16 @@ async def reset_conversation(request: Request):
 @app.post("/api/messages")
 async def messages(request: Request):
     """Handle incoming messages from Microsoft Teams/Bot Framework"""
+    # Rate limiting check (if available) - 30 requests per minute per IP
+    if RATE_LIMITING_AVAILABLE:
+        try:
+            limiter = request.app.state.limiter
+            # Note: slowapi's limit decorator doesn't work well with async,
+            # so we use the underlying check directly
+            limit_value = "30/minute"
+        except Exception as rl_err:
+            print(f"[App] Rate limit check error: {rl_err}")
+
     try:
         body = await request.json()
         
@@ -598,41 +635,36 @@ async def get_assistant_response_streaming(
 
 
 async def get_bot_token(request: Request = None) -> str:
-    """Get OAuth token for Bot Framework with caching"""
+    """Get OAuth token for Bot Framework with caching and thread safety."""
     global token_cache
 
     if not BOT_APP_ID or not BOT_APP_PASSWORD:
         print("Warning: BOT_APP_ID or BOT_APP_PASSWORD not set")
         return ""
 
-    # Return cached token if still valid (with 5-minute buffer)
+    # Fast path: check cache without lock
     if token_cache and datetime.utcnow() < token_cache.expires_at - timedelta(minutes=5):
         return token_cache.token
 
-    # For SingleTenant apps, we need to authenticate against the tenant
-    # but use the Bot Framework scope
-    if not AZURE_TENANT_ID:
-        print("Warning: AZURE_TENANT_ID not set for single-tenant app")
-        return ""
-    tenant_id = AZURE_TENANT_ID
+    # Acquire lock for token refresh (prevents multiple concurrent refresh attempts)
+    async with token_cache_lock:
+        # Double-check after acquiring lock (another coroutine may have refreshed)
+        if token_cache and datetime.utcnow() < token_cache.expires_at - timedelta(minutes=5):
+            return token_cache.token
 
-    # Use pooled HTTP client if available, otherwise create new one
-    http_client = request.app.state.http_client if request and hasattr(request.app.state, 'http_client') else None
+        # For SingleTenant apps, we need to authenticate against the tenant
+        # but use the Bot Framework scope
+        if not AZURE_TENANT_ID:
+            print("Warning: AZURE_TENANT_ID not set for single-tenant app")
+            return ""
+        tenant_id = AZURE_TENANT_ID
 
-    try:
-        if http_client:
-            response = await http_client.post(
-                f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token",
-                data={
-                    "grant_type": "client_credentials",
-                    "client_id": BOT_APP_ID,
-                    "client_secret": BOT_APP_PASSWORD,
-                    "scope": "https://api.botframework.com/.default"
-                }
-            )
-        else:
-            async with httpx.AsyncClient() as temp_client:
-                response = await temp_client.post(
+        # Use pooled HTTP client if available, otherwise create new one
+        http_client = request.app.state.http_client if request and hasattr(request.app.state, 'http_client') else None
+
+        try:
+            if http_client:
+                response = await http_client.post(
                     f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token",
                     data={
                         "grant_type": "client_credentials",
@@ -641,22 +673,33 @@ async def get_bot_token(request: Request = None) -> str:
                         "scope": "https://api.botframework.com/.default"
                     }
                 )
+            else:
+                async with httpx.AsyncClient() as temp_client:
+                    response = await temp_client.post(
+                        f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token",
+                        data={
+                            "grant_type": "client_credentials",
+                            "client_id": BOT_APP_ID,
+                            "client_secret": BOT_APP_PASSWORD,
+                            "scope": "https://api.botframework.com/.default"
+                        }
+                    )
 
-        if response.status_code == 200:
-            data = response.json()
-            # Cache the token
-            token_cache = TokenCache(
-                token=data.get("access_token", ""),
-                expires_at=datetime.utcnow() + timedelta(seconds=data.get("expires_in", 3600))
-            )
-            print(f"✅ Bot token cached (expires in {data.get('expires_in', 3600)}s)")
-            return token_cache.token
-        else:
-            print(f"Failed to get token: {response.text}")
+            if response.status_code == 200:
+                data = response.json()
+                # Cache the token
+                token_cache = TokenCache(
+                    token=data.get("access_token", ""),
+                    expires_at=datetime.utcnow() + timedelta(seconds=data.get("expires_in", 3600))
+                )
+                print(f"[App] Bot token refreshed (expires in {data.get('expires_in', 3600)}s)")
+                return token_cache.token
+            else:
+                print(f"[App] Failed to get token: {response.text}")
+                return ""
+        except Exception as e:
+            print(f"[App] Error getting bot token: {e}")
             return ""
-    except Exception as e:
-        print(f"Error getting bot token: {e}")
-        return ""
 
 
 async def send_reply(

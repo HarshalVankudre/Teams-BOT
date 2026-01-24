@@ -24,13 +24,22 @@ def model_supports_reasoning(model_name: str) -> bool:
     )
 
 
-# Import single agent
+# Import single agent (prefer clean agent when available)
+SINGLE_AGENT_AVAILABLE = False
+CLEAN_AGENT_AVAILABLE = False
+
+try:
+    from .single_agent_clean import CleanSingleAgent, create_clean_agent
+    CLEAN_AGENT_AVAILABLE = True
+except ImportError as e:
+    print(f"[WARNING] Clean agent not available: {e}")
+
 try:
     from .single_agent import SingleAgent, create_single_agent
     SINGLE_AGENT_AVAILABLE = True
 except ImportError as e:
-    SINGLE_AGENT_AVAILABLE = False
-    print(f"[WARNING] Single agent not available: {e}")
+    if not CLEAN_AGENT_AVAILABLE:
+        print(f"[WARNING] Single agent not available: {e}")
 
 # Import embeddings for fallback
 from .vector_store import PineconeStore
@@ -51,14 +60,21 @@ class RAGSearch:
         self.embedding_service = EmbeddingService()
         self.redis_client = redis_client
 
-        # Model settings from config
-        self.model = config.response_model
-        self.reasoning_effort = config.response_reasoning
+        # Provider selection (SingleAgent uses provider directly).
+        self.provider = (config.llm_provider or "openai").lower()
 
-        if not self.model or not self.reasoning_effort:
-            raise ValueError("OPENAI_MODEL and REASONING_EFFORT must be set in .env")
+        # Fallback responses use OpenAI Responses API.
+        # Keep separate from the main provider model to avoid invalid model names.
+        self.model = config.openai_model
+        self.reasoning_effort = config.openai_reasoning or "none"
 
-        print(f"[RAG] Model: {self.model}, Reasoning: {self.reasoning_effort}")
+        if not self.model:
+            if config.use_agent_system and SINGLE_AGENT_AVAILABLE:
+                print("[RAG] OpenAI fallback disabled (OPENAI_MODEL missing).")
+            else:
+                raise ValueError("OPENAI_MODEL must be set in .env for fallback mode")
+
+        print(f"[RAG] Provider: {self.provider} | Agent model: {config.response_model} | Fallback model: {self.model}")
 
         # Pinecone direct access (for fallback)
         self.pc = pinecone.Pinecone(api_key=config.pinecone_api_key)
@@ -66,22 +82,32 @@ class RAGSearch:
         self.machinery_namespace = config.pinecone_machinery_namespace
         self.documents_namespace = config.pinecone_namespace
 
-        # Single Agent
-        self.use_single_agent = config.use_agent_system and SINGLE_AGENT_AVAILABLE
+        # Single Agent - prefer clean agent for stability
+        self.use_single_agent = config.use_agent_system and (CLEAN_AGENT_AVAILABLE or SINGLE_AGENT_AVAILABLE)
         self.agent = None
 
         if self.use_single_agent:
             try:
-                self.agent = create_single_agent(
-                    verbose=config.agent_verbose,
-                    pinecone_service=self.vector_store,
-                )
-                print("[RAG] Single Agent: Enabled")
+                # Use clean agent by default (simpler, more reliable)
+                if config.use_clean_agent and CLEAN_AGENT_AVAILABLE:
+                    self.agent = create_clean_agent(
+                        verbose=config.agent_verbose,
+                        pinecone_service=self.vector_store,
+                    )
+                    print("[RAG] Clean Agent: Enabled (simplified architecture)")
+                elif SINGLE_AGENT_AVAILABLE:
+                    self.agent = create_single_agent(
+                        verbose=config.agent_verbose,
+                        pinecone_service=self.vector_store,
+                    )
+                    print("[RAG] Single Agent: Enabled (full features)")
+                else:
+                    raise ImportError("No agent implementation available")
             except Exception as e:
-                print(f"[RAG] Single Agent initialization failed: {e}")
+                print(f"[RAG] Agent initialization failed: {e}")
                 self.use_single_agent = False
         else:
-            print("[RAG] Single Agent: Disabled (using direct search)")
+            print("[RAG] Agent: Disabled (using direct search)")
 
         # LangGraph agent (new)
         self.langgraph_agent = None
@@ -255,6 +281,16 @@ class RAGSearch:
         """Fallback to direct Pinecone search without agent system"""
         print("[RAG] Using fallback direct search...")
 
+        if not self.model:
+            return {
+                "response": "Fallback ist deaktiviert, da OPENAI_MODEL nicht konfiguriert ist.",
+                "sources": [],
+                "chunks_used": 0,
+                "response_id": None,
+                "web_results_used": 0,
+                "query_type": "error"
+            }
+
         # Search Pinecone
         search_results = await self.search_pinecone(query, top_k=top_k, filters=filters)
 
@@ -331,7 +367,9 @@ Frage: {query}"""}
         top_k: int = 5,
         filters: Optional[Dict[str, Any]] = None
     ) -> List[Dict[str, Any]]:
-        """Direct Pinecone search across namespaces"""
+        """Direct Pinecone search across namespaces in parallel."""
+        import asyncio
+
         query_embedding = await self.embedding_service.embed_query(query)
 
         # Build Pinecone filter
@@ -346,54 +384,64 @@ Frage: {query}"""}
                 else:
                     pinecone_filter[key] = {"$eq": value}
 
-        all_results = []
+        # Helper function to search a single namespace in executor
+        def _search_namespace_sync(namespace: str, content_key: str, title_key: str, source_default: str):
+            """Search a single namespace (sync, for executor)."""
+            try:
+                results = self.index.query(
+                    vector=query_embedding,
+                    top_k=top_k,
+                    namespace=namespace,
+                    include_metadata=True,
+                    filter=pinecone_filter
+                )
+                formatted = []
+                for match in results.matches:
+                    metadata = match.metadata or {}
+                    formatted.append({
+                        "id": match.id,
+                        "score": match.score,
+                        "metadata": metadata,
+                        "namespace": "documents" if namespace == self.documents_namespace else "machinery",
+                        "content": metadata.get(content_key, ""),
+                        "title": metadata.get(title_key, ""),
+                        "source_file": metadata.get("source_file", source_default)
+                    })
+                return formatted
+            except Exception as e:
+                print(f"[Search] {namespace} error: {e}")
+                return []
 
-        # Search documents namespace
-        try:
-            doc_results = self.index.query(
-                vector=query_embedding,
-                top_k=top_k,
-                namespace=self.documents_namespace,
-                include_metadata=True,
-                filter=pinecone_filter
-            )
-            for match in doc_results.matches:
-                all_results.append({
-                    "id": match.id,
-                    "score": match.score,
-                    "metadata": match.metadata,
-                    "namespace": "documents",
-                    "content": match.metadata.get("content", ""),
-                    "title": match.metadata.get("title", ""),
-                    "source_file": match.metadata.get("source_file", "")
-                })
-        except Exception as e:
-            print(f"[Search] Documents error: {e}")
+        # Run both searches in parallel using executor (Pinecone client is sync)
+        loop = asyncio.get_event_loop()
 
-        # Search machinery namespace
-        try:
-            machinery_results = self.index.query(
-                vector=query_embedding,
-                top_k=top_k,
-                namespace=self.machinery_namespace,
-                include_metadata=True,
-                filter=pinecone_filter
-            )
-            for match in machinery_results.matches:
-                metadata = match.metadata or {}
-                all_results.append({
-                    "id": match.id,
-                    "score": match.score,
-                    "metadata": metadata,
-                    "namespace": "machinery",
-                    "content": metadata.get("inhalt", ""),
-                    "title": metadata.get("titel", ""),
-                    "source_file": "machinery-database"
-                })
-        except Exception as e:
-            print(f"[Search] Machinery error: {e}")
+        doc_task = loop.run_in_executor(
+            None,
+            _search_namespace_sync,
+            self.documents_namespace, "content", "title", "Unknown"
+        )
+        machinery_task = loop.run_in_executor(
+            None,
+            _search_namespace_sync,
+            self.machinery_namespace, "inhalt", "titel", "machinery-database"
+        )
 
-        # Sort by score
+        # Wait for both searches to complete
+        doc_results, machinery_results = await asyncio.gather(
+            doc_task, machinery_task,
+            return_exceptions=True
+        )
+
+        # Handle any exceptions from gather
+        if isinstance(doc_results, Exception):
+            print(f"[Search] Documents parallel error: {doc_results}")
+            doc_results = []
+        if isinstance(machinery_results, Exception):
+            print(f"[Search] Machinery parallel error: {machinery_results}")
+            machinery_results = []
+
+        # Combine and sort by score
+        all_results = doc_results + machinery_results
         all_results.sort(key=lambda x: x.get("score", 0), reverse=True)
         return all_results
 

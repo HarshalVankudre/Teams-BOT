@@ -22,17 +22,40 @@ class RAGConfig:
         AGENT_VERIFICATION_MODEL: Model for SQL verification (empty = use main model)
     """
 
+    # LLM Provider Selection
+    llm_provider: str = os.getenv("LLM_PROVIDER", "openai")  # openai, cerebras
+
     # OpenAI Settings
     openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
-    openai_model: str = os.getenv("OPENAI_MODEL", "")  # e.g., gpt-4o, gpt-4o-mini
-    openai_reasoning: str = os.getenv("REASONING_EFFORT", "")  # none, low, medium, high
+    openai_model: str = os.getenv("OPENAI_MODEL", "gpt-4o")  # Default to gpt-4o
+    openai_reasoning: str = os.getenv("REASONING_EFFORT", "none")  # none for gpt-4o, only o1/o3 use this
+    openai_temperature: float = float(os.getenv("OPENAI_TEMPERATURE", "0.1"))  # Low for factual responses
+    openai_max_tokens: int = int(os.getenv("OPENAI_MAX_TOKENS", "4096"))
+    openai_top_p: float = float(os.getenv("OPENAI_TOP_P", "0.95"))
+    openai_frequency_penalty: float = float(os.getenv("OPENAI_FREQUENCY_PENALTY", "0.0"))
+    openai_presence_penalty: float = float(os.getenv("OPENAI_PRESENCE_PENALTY", "0.0"))
+
+    # Cerebras Settings
+    cerebras_api_key: str = os.getenv("CEREBRAS_API_KEY", "")
+    cerebras_model: str = os.getenv("CEREBRAS_MODEL", "gpt-oss-120b")  # e.g., gpt-oss-120b, llama-3.3-70b
+    cerebras_reasoning: str = os.getenv("CEREBRAS_REASONING", "low")  # low, medium, high (gpt-oss-120b only)
+
+    # Groq Settings (for LangGraph agent)
+    groq_api_key: str = os.getenv("GROQ_API_KEY", "")
+    groq_model: str = os.getenv("GROQ_MODEL", "meta-llama/llama-4-maverick-17b-128e-instruct")
 
     @property
     def response_model(self) -> str:
+        provider = (self.llm_provider or "openai").lower()
+        if provider == "cerebras":
+            return self.cerebras_model
         return self.openai_model
 
     @property
     def response_reasoning(self) -> str:
+        provider = (self.llm_provider or "openai").lower()
+        if provider == "cerebras":
+            return self.cerebras_reasoning
         return self.openai_reasoning
 
     # Chunking Model (from .env with fallback)
@@ -71,34 +94,51 @@ class RAGConfig:
     use_agent_system: bool = os.getenv("USE_AGENT_SYSTEM", "true").lower() == "true"
     use_langgraph_agent: bool = os.getenv("USE_LANGGRAPH_AGENT", "true").lower() == "true"
     agent_parallel_execution: bool = os.getenv("AGENT_PARALLEL_EXECUTION", "true").lower() == "true"
-    agent_verbose: bool = os.getenv("AGENT_VERBOSE", "false").lower() == "true"
-    agent_prefetch_documents: bool = os.getenv("AGENT_PREFETCH_DOCUMENTS", "true").lower() == "true"
-    agent_max_completion_tokens: int = int(os.getenv("AGENT_MAX_COMPLETION_TOKENS", "1200"))
+    agent_verbose: bool = os.getenv("AGENT_VERBOSE", "true").lower() == "true"  # Enable for debugging
+    agent_prefetch_documents: bool = os.getenv("AGENT_PREFETCH_DOCUMENTS", "false").lower() == "true"  # Disable unless needed
+    agent_max_completion_tokens: int = int(os.getenv("AGENT_MAX_COMPLETION_TOKENS", "4096"))  # Match OpenAI max tokens
     agent_max_tool_rounds: int = int(os.getenv("AGENT_MAX_TOOL_ROUNDS", "6"))
 
-    # Enhanced Agent Features (all configurable, all off by default for safety)
-    agent_enable_planning: bool = os.getenv("AGENT_ENABLE_PLANNING", "true").lower() == "true"
-    agent_enable_sql_verification: bool = os.getenv("AGENT_ENABLE_SQL_VERIFICATION", "true").lower() == "true"
-    agent_enable_reasoning_tools: bool = os.getenv("AGENT_ENABLE_REASONING_TOOLS", "true").lower() == "true"
+    # Schema Linker Settings
+    schema_linker_top_k: int = int(os.getenv("SCHEMA_LINKER_TOP_K", "40"))  # More columns visible to model
+
+    # Enhanced Agent Features (GPT-4o optimized defaults)
+    agent_enable_planning: bool = os.getenv("AGENT_ENABLE_PLANNING", "false").lower() == "true"  # GPT-4o doesn't need extra planning
+    agent_enable_sql_verification: bool = os.getenv("AGENT_ENABLE_SQL_VERIFICATION", "true").lower() == "true"  # Keep SQL verification on
+    agent_enable_reasoning_tools: bool = os.getenv("AGENT_ENABLE_REASONING_TOOLS", "false").lower() == "true"
     agent_planning_model: str = os.getenv("AGENT_PLANNING_MODEL", "")  # Empty = use main model
     agent_verification_model: str = os.getenv("AGENT_VERIFICATION_MODEL", "")  # Empty = use main model
+
+    # Use clean/simplified agent architecture (recommended for stability)
+    use_clean_agent: bool = os.getenv("USE_CLEAN_AGENT", "true").lower() == "true"
 
     # Prompt optimization
     agent_compact_prompt: bool = os.getenv("AGENT_COMPACT_PROMPT", "true").lower() == "true"  # Reduce prompt size
 
-    # Conversation Settings
-    conversation_ttl_hours: int = int(os.getenv("CONVERSATION_TTL_HOURS", "72"))
-    conversation_max_messages: int = int(os.getenv("CONVERSATION_MAX_MESSAGES", "40"))
+    # Conversation Settings (GPT-4o has large context, can keep more history)
+    conversation_ttl_hours: int = int(os.getenv("CONVERSATION_TTL_HOURS", "24"))
+    conversation_max_messages: int = int(os.getenv("CONVERSATION_MAX_MESSAGES", "6"))
+
+    # Logging Settings
+    log_level: str = os.getenv("LOG_LEVEL", "INFO")
+    log_json: bool = os.getenv("LOG_JSON", "false").lower() == "true"
 
     def validate(self):
         """Validate required configuration"""
         errors = []
 
-        # OpenAI is required
-        if not self.openai_api_key:
-            errors.append("OPENAI_API_KEY is required")
-        if not self.openai_model:
-            errors.append("OPENAI_MODEL is required")
+        # Validate based on selected provider
+        if self.llm_provider == "cerebras":
+            if not self.cerebras_api_key:
+                errors.append("CEREBRAS_API_KEY is required when LLM_PROVIDER=cerebras")
+            if not self.cerebras_model:
+                errors.append("CEREBRAS_MODEL is required when LLM_PROVIDER=cerebras")
+        else:
+            # OpenAI is default
+            if not self.openai_api_key:
+                errors.append("OPENAI_API_KEY is required")
+            if not self.openai_model:
+                errors.append("OPENAI_MODEL is required")
 
         # Pinecone is always required
         if not self.pinecone_api_key:

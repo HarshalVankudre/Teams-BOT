@@ -73,7 +73,7 @@ class PineconeStore:
         top_k: int = None,
         filters: Optional[Dict[str, Any]] = None,
         include_metadata: bool = True,
-        search_all_namespaces: bool = True
+        search_all_namespaces: bool = False  # Only search docs namespace for speed
     ) -> List[Dict[str, Any]]:
         """
         Search for similar chunks using a text query.
@@ -83,7 +83,7 @@ class PineconeStore:
             top_k: Number of results to return
             filters: Metadata filters to apply
             include_metadata: Whether to include metadata in results
-            search_all_namespaces: If True, search both documents and machinery namespaces
+            search_all_namespaces: If True, search both documents and machinery namespaces (slower)
 
         Returns:
             List of matching chunks with scores
