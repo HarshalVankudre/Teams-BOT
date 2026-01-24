@@ -32,6 +32,37 @@ class RAGConfig:
             return self.groq_model
         return self.openai_model
 
+    @property
+    def response_reasoning(self) -> str:
+        """Get reasoning effort (for compatibility with OpenAI o-series models)"""
+        return os.getenv("REASONING_EFFORT", "none")
+
+    # Legacy provider support (for app.py compatibility)
+    @property
+    def cerebras_model(self) -> str:
+        """Legacy: Cerebras model (not used with Groq)"""
+        return os.getenv("CEREBRAS_MODEL", "")
+
+    @property
+    def openai_reasoning(self) -> str:
+        """OpenAI reasoning effort setting"""
+        return os.getenv("REASONING_EFFORT", "none")
+
+    @property
+    def use_agent_system(self) -> bool:
+        """Whether to use the agent system"""
+        return os.getenv("USE_AGENT_SYSTEM", "true").lower() == "true"
+
+    @property
+    def use_clean_agent(self) -> bool:
+        """Whether to use the clean agent (legacy)"""
+        return os.getenv("USE_CLEAN_AGENT", "false").lower() == "true"
+
+    @property
+    def fallback_max_output_tokens(self) -> int:
+        """Max output tokens for fallback responses"""
+        return int(os.getenv("FALLBACK_MAX_OUTPUT_TOKENS", "4096"))
+
     # Embedding Model
     embedding_model: str = os.getenv("EMBEDDING_MODEL", "text-embedding-3-large")
     embedding_dimensions: int = 3072

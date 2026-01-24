@@ -50,9 +50,13 @@ LLM_PROVIDER = (config.llm_provider or "openai").lower()
 MODEL_NAME = config.response_model
 REASONING_EFFORT = config.response_reasoning
 
-if LLM_PROVIDER == "cerebras":
+# Validate model configuration based on provider
+if LLM_PROVIDER == "groq":
+    if not config.groq_api_key:
+        raise ValueError("GROQ_API_KEY must be set when using Groq provider")
+elif LLM_PROVIDER == "cerebras":
     if not config.cerebras_model:
-        raise ValueError("CEREBRAS_MODEL must be set in .env file")
+        raise ValueError("CEREBRAS_MODEL must be set when using Cerebras provider")
 else:
     if not config.openai_model:
         raise ValueError("OPENAI_MODEL must be set in .env file")
