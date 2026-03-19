@@ -295,7 +295,10 @@ class PostgresService:
             fetch_ms = (time.time() - fetch_start) * 1000
 
             total_ms = (time.time() - query_start) * 1000
-            print(f"⏱️  [postgres:query] {total_ms:.0f}ms (conn={conn_ms:.0f}ms, exec={exec_ms:.0f}ms, fetch={fetch_ms:.0f}ms, rows={len(results)})")
+            print(
+                f"[postgres:query] {total_ms:.0f}ms "
+                f"(conn={conn_ms:.0f}ms, exec={exec_ms:.0f}ms, fetch={fetch_ms:.0f}ms, rows={len(results)})"
+            )
 
             return results
         except Exception as e:
@@ -315,14 +318,29 @@ class PostgresService:
         if self._column_cache is not None and not refresh:
             return self._column_cache
 
-        sql = """
+        info_schema_sql = """
             SELECT column_name, data_type
             FROM information_schema.columns
             WHERE table_schema = %s AND table_name = %s
             ORDER BY ordinal_position
         """
+        pg_catalog_sql = """
+            SELECT
+                a.attname AS column_name,
+                format_type(a.atttypid, a.atttypmod) AS data_type
+            FROM pg_attribute a
+            JOIN pg_class c ON c.oid = a.attrelid
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = %s
+              AND c.relname = %s
+              AND a.attnum > 0
+              AND NOT a.attisdropped
+            ORDER BY a.attnum
+        """
         try:
-            rows = self.execute_query(sql, (self.config.schema, self.config.equipment_table))
+            rows = self.execute_query(info_schema_sql, (self.config.schema, self.config.equipment_table))
+            if not rows:
+                rows = self.execute_query(pg_catalog_sql, (self.config.schema, self.config.equipment_table))
         except Exception as e:
             print(f"[PostgreSQL] Column lookup failed: {e}")
             return {}

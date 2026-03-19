@@ -12,10 +12,10 @@ EQUIPMENT_TABLE_FQN = f"{_SCHEMA}.{_TABLE}"
 
 # Core schema that doesn't change - property columns come from ColumnCatalog
 DATABASE_SCHEMA = f"""
-DATABASE: SEMA Equipment (public.equipment_matrix)
+DATABASE: SEMA Equipment ({EQUIPMENT_TABLE_FQN})
 
 TABLE: {EQUIPMENT_TABLE_FQN}
-Contains ~2400 equipment records with properties.
+Contains equipment inventory and machine properties.
 
 CORE COLUMNS (always use these):
 - id (BIGINT) - Unique identifier
@@ -28,7 +28,7 @@ CORE COLUMNS (always use these):
 - geraetegruppe_code (TEXT) - Category code
 - verwendung_code (TEXT) - Usage: 'MIET' (rental) or 'VK' (sale)
 - verwendung_name (TEXT) - Usage name: 'Vermietung' or 'Verkauf'
-- nuclos_state (TEXT) - Availability: 'Released' (available) or 'Locked' (unavailable)
+- nuclos_state (TEXT) - Bestandsstatus im System, NICHT die Live-Verfuegbarkeit
 
 EQUIPMENT CATEGORIES (geraetegruppe_name values):
 Use exact names for filtering. Examples:
@@ -41,56 +41,32 @@ Use exact names for filtering. Examples:
 
 IMPORTANT - Category filtering:
 - Use exact match: WHERE geraetegruppe_name = 'Kettenfertiger'
-- NOT: WHERE geraetegruppe_name ILIKE '%fertiger%' AND prop_e2100_mobil_kette IS NOT NULL
+- If unsure, query distinct values first instead of guessing.
 
-For unknown categories, query first:
-SELECT DISTINCT geraetegruppe_name, COUNT(*)
-FROM {EQUIPMENT_TABLE_FQN}
-WHERE geraetegruppe_name ILIKE '%suchbegriff%'
-GROUP BY geraetegruppe_name;
-
-AVAILABILITY:
-- Released = available/ready
-- Locked = not available
+NUCLOS-STATUS:
+- Released = im Bestand / im System freigegeben
+- Locked = gesperrt / nicht freigegeben
+- Wichtig: Aus `nuclos_state` keine echte Dispositions- oder Miet-Verfuegbarkeit ableiten
 
 USAGE:
 - MIET = rental
 - VK = sale/purchase
 
-KOSTENSTELLE (cost center):
-Stored in ibs_nuclet_geraete_kostenstelle as "CODE - Name"
-Example: "200 - Mietpark", "100 - Handel"
-Query with: WHERE ibs_nuclet_geraete_kostenstelle ILIKE '%200%'
+KOSTENSTELLE:
+- Stored in ibs_nuclet_geraete_kostenstelle as "CODE - Name"
+- Example: "200 - Mietpark", "100 - Handel"
 
 PROPERTY COLUMNS:
-Property columns are named prop_e####_name_unit (e.g., prop_e1740_grabtiefe_mm).
-Values are stored as TEXT with units like "3410 mm - Millimeter".
-To filter numeric values:
-  CAST(NULLIF(regexp_replace(column_name, '[^0-9]', '', 'g'), '') AS NUMERIC)
-
-For boolean properties: WHERE column_name = 'Ja' or IS NOT NULL
-
-See the PROPERTY COLUMNS CATALOG section for full list of available columns.
+- Named like prop_e####_name_unit
+- Many values are stored as TEXT with units
+- For numeric filters use numeric helper columns where available, otherwise cast cleaned text
+- Boolean properties are often 'Ja' or non-null
 
 BASIC QUERY PATTERNS:
----------------------
-Count total:
-  SELECT COUNT(*) AS count FROM {EQUIPMENT_TABLE_FQN};
-
-Rental machines:
-  SELECT COUNT(*) FROM {EQUIPMENT_TABLE_FQN} WHERE verwendung_code = 'MIET';
-
-Filter by manufacturer:
-  SELECT id, bezeichnung, hersteller_name FROM {EQUIPMENT_TABLE_FQN}
-  WHERE hersteller_name ILIKE '%bomag%' LIMIT 10;
-
-Search by serial/inventory:
-  SELECT id, bezeichnung FROM {EQUIPMENT_TABLE_FQN}
-  WHERE seriennummer ILIKE '%search%' OR inventarnummer ILIKE '%search%' LIMIT 10;
-
-Search by model/name (bezeichnung):
-  SELECT id, bezeichnung, hersteller_name FROM {EQUIPMENT_TABLE_FQN}
-  WHERE bezeichnung ILIKE '%search_term%' LIMIT 10;
+- Count total records
+- Filter by manufacturer with hersteller_name ILIKE
+- Search by seriennummer or inventarnummer
+- Search by bezeichnung for model or name lookups
 """
 
 # Alias for backward compatibility

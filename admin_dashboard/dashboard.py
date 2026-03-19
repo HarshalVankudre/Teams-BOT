@@ -25,32 +25,40 @@ admin_logger = AdminLogger(config)
 
 app = Flask(__name__)
 
+# Support running behind a reverse proxy at /admin
+PROXY_PREFIX = os.getenv("ADMIN_PROXY_PREFIX", "/admin")
+if PROXY_PREFIX:
+    from werkzeug.middleware.proxy_fix import ProxyFix
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_prefix=1)
+    # Tell Caddy to set X-Forwarded-Prefix, or handle it here
+    class PrefixMiddleware:
+        def __init__(self, wsgi_app, prefix):
+            self.app = wsgi_app
+            self.prefix = prefix
+        def __call__(self, environ, start_response):
+            environ['SCRIPT_NAME'] = self.prefix
+            path = environ.get('PATH_INFO', '')
+            if path.startswith(self.prefix):
+                environ['PATH_INFO'] = path[len(self.prefix):] or '/'
+            return self.app(environ, start_response)
+    app.wsgi_app = PrefixMiddleware(app.wsgi_app, PROXY_PREFIX)
+
 
 @app.route('/health')
 def health():
-    """Health check endpoint for App Runner."""
-    # Get counts if database available
-    stats = {}
+    """Health check endpoint. Uses lightweight DB check."""
+    db_ok = False
     if admin_logger.available:
         try:
-            stats = admin_logger.get_statistics()
-        except Exception as e:
-            stats = {'error': str(e)}
+            with admin_logger._db() as conn:
+                conn.execute("SELECT 1")
+            db_ok = True
+        except Exception:
+            db_ok = False
 
     return {
         'status': 'healthy',
-        'database': admin_logger.available,
-        'config': {
-            'host': config.host[:20] + '...' if config.host else 'NOT SET',
-            'db': config.database or 'NOT SET',
-            'user': config.user or 'NOT SET',
-            'password_set': bool(config.password),
-        },
-        'counts': {
-            'users': stats.get('total_users', 0),
-            'conversations': stats.get('total_conversations', 0),
-            'messages': stats.get('total_messages', 0),
-        }
+        'database': db_ok,
     }, 200
 
 
@@ -266,9 +274,23 @@ def truncate_text(text, length=100):
 
 @app.template_filter('format_datetime')
 def format_datetime(dt):
-    """Format datetime for display."""
+    """Format datetime for display. Handles both datetime objects and strings (SQLite)."""
     if not dt:
         return '-'
+    if isinstance(dt, str):
+        try:
+            from datetime import datetime
+            # Handle common PostgreSQL/SQLite timestamp formats
+            for fmt in ('%Y-%m-%d %H:%M:%S.%f', '%Y-%m-%d %H:%M:%S', '%Y-%m-%dT%H:%M:%S'):
+                try:
+                    dt = datetime.strptime(dt, fmt)
+                    break
+                except ValueError:
+                    continue
+            else:
+                return dt[:16].replace('T', ' ')
+        except Exception:
+            return str(dt)[:16]
     return dt.strftime('%d.%m.%Y %H:%M')
 
 
@@ -285,7 +307,7 @@ def format_ms(ms):
 if __name__ == '__main__':
     print("=" * 50)
     print("Admin Dashboard starting...")
-    print(f"Database: {config.database}")
+    print(f"Database: {config.db_path}")
     print(f"Available: {admin_logger.available}")
     print("=" * 50)
     app.run(host='0.0.0.0', port=5000, debug=True)

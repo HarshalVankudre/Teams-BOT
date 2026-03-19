@@ -1,12 +1,12 @@
 """
-Microsoft Teams Bot Backend with Single Agent RAG
+Microsoft Teams Bot Backend for the RUEKO equipment assistant
 
 Features:
 - Token caching for Bot Framework authentication
 - HTTP connection pooling for better performance
 - Redis for persistent conversation storage (per-user isolation)
 - Graceful fallback to in-memory storage if Redis unavailable
-- Single Agent RAG with Pinecone + PostgreSQL
+- Gemini advisory routing + LangGraph retrieval + Pinecone fallback
 - Rate limiting for API endpoints
 """
 import os
@@ -14,6 +14,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+import logging
 from fastapi import FastAPI, Request, Response
 import httpx
 import redis.asyncio as redis
@@ -40,105 +41,38 @@ from rag.admin_logger import admin_logger
 # Load environment variables from .env file
 load_dotenv()
 
+logger = logging.getLogger(__name__)
+
 # Configuration
 BOT_APP_ID = os.getenv("BOT_APP_ID", "")
 BOT_APP_PASSWORD = os.getenv("BOT_APP_PASSWORD", "")
 AZURE_TENANT_ID = os.getenv("AZURE_TENANT_ID", "")  # Required for single-tenant apps
 
-# Model configuration (provider-aware)
-LLM_PROVIDER = (config.llm_provider or "openai").lower()
-MODEL_NAME = config.response_model
-REASONING_EFFORT = config.response_reasoning
-
-# Validate model configuration based on provider
-if LLM_PROVIDER == "groq":
-    if not config.groq_api_key:
-        raise ValueError("GROQ_API_KEY must be set when using Groq provider")
-elif LLM_PROVIDER == "cerebras":
-    if not config.cerebras_model:
-        raise ValueError("CEREBRAS_MODEL must be set when using Cerebras provider")
-else:
-    if not config.openai_model:
-        raise ValueError("OPENAI_MODEL must be set in .env file")
+# Model configuration
+MODEL_NAME = config.langgraph_model
+ADVISORY_MODEL = config.advisory_model
+FALLBACK_MODEL = config.fallback_model
 # Redis configuration
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 CONVERSATION_TTL_HOURS = int(os.getenv("CONVERSATION_TTL_HOURS", "24"))
 
 # Agent configuration
 AGENT_VERBOSE = os.getenv("AGENT_VERBOSE", "false").lower() == "true"
+SYSTEM_INSTRUCTIONS = config.system_instructions
 
-SYSTEM_INSTRUCTIONS = os.getenv("SYSTEM_INSTRUCTIONS", """Du bist der RUEKO AI-Assistent mit Zugriff auf interne Daten (SQL und Pinecone).
-
-DATENPRIORITAET (WICHTIG):
-1. SQL-Datenbank: strukturierte Maschinen- und Ausstattungsdaten.
-2. Pinecone-Dokumente: Handbuecher, Anleitungen, Richtlinien.
-3. Keine Web-Suche und kein externes Wissen.
-
-KERNREGELN:
-1. Antworte ausschliesslich auf Basis interner Daten (SQL + Pinecone).
-2. Zitiere Quellen nur wenn der Nutzer explizit danach fragt.
-3. Wenn interne Daten fehlen: sage das freundlich und stelle eine Rueckfrage.
-4. Erfinde NIEMALS Informationen.
-
-TON & STIL (FREUNDLICH):
-- Beginne mit kurzer Bestaetigung: "Gerne!" / "Das habe ich gefunden:" / "Klar!"
-- Nutze "Sie" (formell) aber warmherzig - nicht steif oder roboterhaft
-- Bei leeren Ergebnissen: empathisch formulieren, Alternativen vorschlagen
-- VERMEIDE: Kalte Aufzaehlungen ohne Kontext, abrupte Antworten
-
-EMOJIS (DEZENT - max 1-2 pro Antwort):
-- Erfolg/Gefunden: verwende ein Haekchen
-- Maschinen/Geraete: verwende Werkzeug oder Traktor Symbol
-- Listen/Anzahl: verwende Klemmbrett Symbol
-- Hinweis/Tipp: verwende Gluehbirne Symbol
-- NICHT uebertreiben: Nie am Satzende haeufen
-
-FORMAT (TEAMS-OPTIMIERT):
-- Nutze **fettgedruckte Labels** fuer wichtige Werte: "**Hersteller:** Bomag"
-- Listen mit klarer Struktur und Bulletpoints (max 5-7)
-- Trenne Abschnitte mit einer Leerzeile
-- Bei mehreren Maschinen: Nummerierte Liste
-- Kurze Zusammenfassung ZUERST, dann Details
-
-FOLLOW-UP TIPPS (PROAKTIV):
-- Bei Ergebnislisten: "Soll ich Details zu einer Maschine zeigen?"
-- Bei Empfehlungen: "Moechten Sie Alternativen sehen?"
-- Bei technischen Fragen: "Brauchen Sie das Handbuch dazu?"
-- Bei 0 Ergebnissen: "Soll ich die Kriterien anpassen?" + konkrete Vorschlaege
-- Nicht bei JEDER Antwort - nur wenn sinnvoll (komplexe Themen, Listen)
-
-ANTWORTZIEL:
-- Antworte auf die konkrete Frage mit Kontext
-- Wenn etwas unklar ist: freundlich eine Rueckfrage stellen
-- Standard: 2-5 Saetze oder 5-7 Bulletpoints
-- Laengere Antworten nur auf ausdrueckliche Bitte
-
-BEISPIEL-ANTWORT:
-"Gerne! Ich habe **3 passende Kettenfertiger** gefunden:
-
-1. **Super 1800-3** (Voegele) - Einbaubreite bis 9.0m, Miete
-2. **Super 2100-3** (Voegele) - Einbaubreite bis 11.5m, Miete
-3. **BF 600 C** (Bomag) - Einbaubreite bis 6.0m, Verkauf
-
-Soll ich technische Details oder die Verfuegbarkeit pruefen?"
-
-WENN KEINE INTERNEN DATEN:
-"Leider habe ich dazu keine Informationen in den internen Datenbanken gefunden. Moechten Sie die Suche mit anderen Kriterien versuchen?"
-""")
-
-# Debug output
-print(f"Bot App ID loaded: {BOT_APP_ID[:10]}..." if BOT_APP_ID else "Bot App ID NOT loaded!")
-print(f"Bot Password loaded: {'Yes' if BOT_APP_PASSWORD else 'No'}")
-print(f"LLM Provider: {LLM_PROVIDER}")
-print(f"Model: {MODEL_NAME}")
-print(f"Reasoning Effort: {REASONING_EFFORT}")
-print(f"Redis URL: {REDIS_URL[:50]}..." if len(REDIS_URL) > 50 else f"Redis URL: {REDIS_URL}")
-print(f"Conversation TTL: {CONVERSATION_TTL_HOURS} hours")
-print(f"Agent Verbose: {'Enabled' if AGENT_VERBOSE else 'Disabled'}")
+logger.info(
+    "Teams bot config loaded: advisory=%s retrieval=%s fallback=%s redis=%s ttl_hours=%s verbose=%s",
+    ADVISORY_MODEL,
+    MODEL_NAME,
+    FALLBACK_MODEL,
+    bool(REDIS_URL),
+    CONVERSATION_TTL_HOURS,
+    AGENT_VERBOSE,
+)
 
 # Initialize RAG search - Redis client added after startup
 rag_search = None  # Initialized in lifespan after Redis is available
-print("RAG Search will be initialized with Pinecone")
+logger.info("RAG search will be initialized during startup")
 
 # Token caching for Bot Framework authentication
 @dataclass
@@ -148,10 +82,6 @@ class TokenCache:
 
 token_cache: TokenCache | None = None
 token_cache_lock = asyncio.Lock()  # Thread-safe token refresh
-
-# Fallback in-memory storage (used when Redis unavailable)
-conversation_responses: dict[str, str] = {}
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -219,68 +149,6 @@ async def get_redis(request: Request) -> redis.Redis | None:
     return None
 
 
-async def store_conversation_id(request: Request, thread_key: str, response_id: str):
-    """Store conversation ID in Redis with TTL, fallback to memory"""
-    r = await get_redis(request)
-    if r:
-        try:
-            await r.setex(
-                f"conversation:{thread_key}",
-                CONVERSATION_TTL_HOURS * 3600,
-                response_id
-            )
-            return
-        except Exception as e:
-            print(f"Redis store error: {e}")
-    # Fallback to in-memory
-    conversation_responses[thread_key] = response_id
-
-
-async def get_conversation_id(request: Request, thread_key: str) -> str | None:
-    """Get conversation ID from Redis, fallback to memory"""
-    r = await get_redis(request)
-    if r:
-        try:
-            result = await r.get(f"conversation:{thread_key}")
-            if result:
-                return result
-        except Exception as e:
-            print(f"Redis get error: {e}")
-    # Fallback to in-memory
-    return conversation_responses.get(thread_key)
-
-
-async def delete_conversation_id(request: Request, thread_key: str):
-    """Delete conversation ID from Redis, fallback to memory"""
-    r = await get_redis(request)
-    if r:
-        try:
-            await r.delete(f"conversation:{thread_key}")
-        except Exception as e:
-            print(f"Redis delete error: {e}")
-    # Also clear from memory
-    conversation_responses.pop(thread_key, None)
-
-
-async def clear_all_conversations(request: Request):
-    """Clear all conversations from Redis, fallback to memory"""
-    r = await get_redis(request)
-    if r:
-        try:
-            # Get all conversation keys and delete them
-            cursor = 0
-            while True:
-                cursor, keys = await r.scan(cursor, match="conversation:*", count=100)
-                if keys:
-                    await r.delete(*keys)
-                if cursor == 0:
-                    break
-        except Exception as e:
-            print(f"Redis clear error: {e}")
-    # Also clear in-memory
-    conversation_responses.clear()
-
-
 @app.get("/")
 async def root():
     return {"status": "ok", "message": "Teams Bot is running"}
@@ -293,18 +161,18 @@ async def root():
 async def health(request: Request):
     """Health check with Redis status"""
     redis_status = "unavailable"
-    active_conversations = len(conversation_responses)
+    active_conversations = 0
 
     r = await get_redis(request)
     if r:
         try:
             await r.ping()
             redis_status = "connected"
-            # Count Redis keys for active conversations
+            # Count Redis history keys for active conversations
             cursor = 0
             count = 0
             while True:
-                cursor, keys = await r.scan(cursor, match="conversation:*", count=100)
+                cursor, keys = await r.scan(cursor, match="chat_history:*", count=100)
                 count += len(keys)
                 if cursor == 0:
                     break
@@ -314,7 +182,9 @@ async def health(request: Request):
 
     return {
         "status": "healthy",
-        "model": MODEL_NAME,
+        "retrieval_model": MODEL_NAME,
+        "advisory_model": ADVISORY_MODEL,
+        "fallback_model": FALLBACK_MODEL,
         "redis": redis_status,
         "active_conversations": active_conversations
     }
@@ -328,11 +198,12 @@ async def reset_conversation(request: Request):
         thread_key = body.get("thread_key")
 
         if thread_key:
-            await delete_conversation_id(request, thread_key)
+            if rag_search:
+                await rag_search.reset_thread_state(thread_key)
             return {"status": "ok", "message": f"Conversation {thread_key} reset"}
         else:
-            # Reset all conversations
-            await clear_all_conversations(request)
+            if rag_search:
+                await rag_search.reset_all_thread_state()
             return {"status": "ok", "message": "All conversations reset"}
     except Exception as e:
         return {"status": "error", "message": str(e)}
@@ -383,6 +254,10 @@ async def messages(request: Request):
             print(f"Message: {user_message}")
             print(f"Conversation ID: {conversation_id}")
 
+            # Create unique thread key per user (combines user ID with conversation ID)
+            # This ensures each user has their own thread even in group chats
+            thread_key = f"{user_id}:{conversation_id}"
+
             # Check if message is a command
             if user_message.strip().startswith("/"):
                 print(f"Command detected: {user_message}")
@@ -400,15 +275,15 @@ async def messages(request: Request):
                         message=message
                     )
 
+                command_name = user_message.strip().split(maxsplit=1)[0].lower()
+                if command_name in {"/zuruecksetzen", "/zurücksetzen", "/reset"} and rag_search:
+                    await rag_search.reset_thread_state(thread_key)
+
                 # Route to command handler
                 await handle_command(body, user_message, send_command_reply)
 
             else:
                 # Regular conversation - AI response
-                # Create unique thread key per user (combines user ID with conversation ID)
-                # This ensures each user has their own thread even in group chats
-                thread_key = f"{user_id}:{conversation_id}"
-
                 # Start continuous typing indicator (for reasoning models that take longer)
                 typing_manager = TypingIndicatorManager(
                     request=request,
@@ -444,8 +319,8 @@ async def messages(request: Request):
                         user_email=user_email,
                         conversation_thread_id=thread_key,
                         response_time_ms=response_time_ms,
-                        query_type=None,
-                        data_source="single_agent"
+                        query_type=(result_metadata or {}).get("query_type"),
+                        data_source=(result_metadata or {}).get("agent", "assistant")
                     )
                 except Exception as fb_error:
                     print(f"[Feedback] Error storing conversation: {fb_error}")
@@ -494,7 +369,7 @@ async def messages(request: Request):
                         reply_to_id=body.get("id"),
                         recipient=body.get("from"),
                         from_bot=body.get("recipient"),
-                        message="Hallo! Ich bin der RUEKO AI Assistant. Ich helfe Ihnen gerne bei Fragen zu Maschinen, Verfuegbarkeiten und technischen Dokumenten. Was kann ich fuer Sie tun?"
+                        message=config.welcome_message
                     )
         
         return Response(status_code=200)
@@ -568,20 +443,14 @@ async def get_custom_rag_response(
     user_id: str = None,
     user_name: str = None
 ) -> tuple[str, dict]:
-    """Get response using the Single Agent with conversation continuity"""
-    print("Using Single Agent...")
+    """Get response from the configured RAG assistant."""
+    logger.info("Processing assistant response for thread=%s", thread_key)
 
     try:
-        # Get previous response ID for conversation continuity (fallback mode)
-        previous_response_id = await get_conversation_id(request, thread_key)
-        if previous_response_id:
-            print(f"Continuing conversation for {thread_key}")
-
         # Search and generate response using agent system
         result = await rag_search.search_and_generate(
             query=user_message,
             system_instructions=SYSTEM_INSTRUCTIONS,
-            previous_response_id=previous_response_id,
             user_id=user_id,
             user_name=user_name,
             thread_key=thread_key
@@ -597,12 +466,6 @@ async def get_custom_rag_response(
         if agents_used:
             print(f"Agents used: {agents_used}")
         print(f"Query type: {query_type}, Execution time: {execution_time}ms")
-
-        # Store response ID for conversation continuity (if using fallback)
-        response_id = result.get("response_id")
-        if response_id:
-            await store_conversation_id(request, thread_key, response_id)
-            print(f"Response ID stored for {thread_key}: {response_id}")
 
         # Add sources if available (only for non-agent responses or minimal sources)
         sources = result.get("sources", [])
@@ -631,7 +494,7 @@ async def get_assistant_response_streaming(
     user_id: str = None,
     user_name: str = None
 ) -> tuple[str, dict]:
-    """Get response from Single Agent"""
+    """Get response from the configured assistant runtime."""
     return await get_custom_rag_response(
         request, thread_key, user_message,
         user_id=user_id, user_name=user_name

@@ -113,7 +113,7 @@ echo %BOLD%%GREEN%============================================================%R
 echo %BOLD%  LangGraph Agent Validation%RESET%
 echo %GREEN%============================================================%RESET%
 echo.
-python -c "print('=== Import Validation ==='); from rag.langgraph_agent import LangGraphAgent, query_equipment, lookup_equipment, search_documents, SYSTEM_PROMPT; print('[OK] All LangGraph imports successful'); from rag.search import RAGSearch; print('[OK] RAGSearch import successful'); from rag.config import config; print(f'[OK] Config loaded'); print(); print('=== Tool Validation ==='); tools = [query_equipment, lookup_equipment, search_documents]; [print(f'[OK] {t.name}: ready') for t in tools]; print(); print('=== All Validations Passed ===')"
+python -c "print('=== Import Validation ==='); from rag.langgraph_agent import LangGraphAgent, get_langgraph_agent, set_shared_postgres, set_shared_pinecone; print('[OK] LangGraph runtime imports successful'); from rag.langgraph_tools import get_langgraph_tools; print(f'[OK] Tool registry loaded: {len(get_langgraph_tools())} tools'); from rag.prompts import LANGGRAPH_SYSTEM_PROMPT; print('[OK] Prompt import successful'); from rag.search import RAGSearch; print('[OK] RAGSearch import successful'); from rag.config import config; print(f'[OK] Config loaded'); print(f'[OK] LangGraph model: {config.langgraph_model}'); print(); print('=== All Validations Passed ===')"
 goto end
 
 :help

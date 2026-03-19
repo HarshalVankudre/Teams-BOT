@@ -1,6 +1,7 @@
 """
-Custom RAG Pipeline for Teams Bot (Simplified)
+Custom RAG Pipeline for Teams Bot
 - LangGraph agent with tools for equipment queries
+- Gemini advisory and fallback generation
 - PostgreSQL for structured data
 - Pinecone for semantic search
 - OpenAI embeddings

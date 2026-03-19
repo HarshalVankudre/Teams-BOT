@@ -1,4 +1,4 @@
-<div align="center">
+﻿<div align="center">
 
 # Teams Equipment Assistant
 
@@ -18,51 +18,51 @@
 
 ## Overview
 
-A Microsoft Teams bot backend that serves as an intelligent assistant for **RÜKO Baumaschinen**, a construction equipment rental company. The bot answers German-language queries about machinery inventory by combining:
+A Microsoft Teams bot backend that serves as an intelligent assistant for **RÃœKO Baumaschinen**, a construction equipment rental company. The bot answers German-language queries about machinery inventory by combining:
 
-- **Structured Data** — SQL queries across 2,400+ equipment records with 100+ properties
-- **Unstructured Data** — Semantic search through technical manuals and documentation
-- **Conversational Memory** — Multi-turn conversations with intelligent follow-ups
+- **Structured Data** â€” SQL queries across 2,400+ equipment records with 100+ properties
+- **Unstructured Data** â€” Semantic search through technical manuals and documentation
+- **Conversational Memory** â€” Multi-turn conversations with intelligent follow-ups
 
 ---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                      Microsoft Teams                             │
-└──────────────────────────┬──────────────────────────────────────┘
-                           │
-                           ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    FastAPI Backend                               │
-│  ┌───────────────┐  ┌──────────────┐  ┌───────────────────┐    │
-│  │ Bot Framework │  │ OAuth Cache  │  │ Typing Indicators │    │
-│  │    Webhook    │  │ (Thread-safe)│  │   (Real-time)     │    │
-│  └───────┬───────┘  └──────────────┘  └───────────────────┘    │
-└──────────┼──────────────────────────────────────────────────────┘
-           │
-           ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                   RAG Orchestrator                               │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │              LangGraph ReAct Agent                       │   │
-│  │  ┌─────────────┐ ┌─────────────┐ ┌─────────────────┐   │   │
-│  │  │ execute_sql │ │  lookup_    │ │ search_documents│   │   │
-│  │  │             │ │  equipment  │ │                 │   │   │
-│  │  └──────┬──────┘ └──────┬──────┘ └────────┬────────┘   │   │
-│  └─────────┼───────────────┼─────────────────┼────────────┘   │
-└────────────┼───────────────┼─────────────────┼────────────────┘
-             │               │                 │
-             ▼               ▼                 ▼
-┌────────────────┐  ┌──────────────┐  ┌──────────────────┐
-│   PostgreSQL   │  │    Redis     │  │     Pinecone     │
-│  ┌──────────┐  │  │ ┌──────────┐ │  │  ┌────────────┐  │
-│  │ 2,400+   │  │  │ │ Session  │ │  │  │ Equipment  │  │
-│  │Equipment │  │  │ │ History  │ │  │  │  Manuals   │  │
-│  │ Records  │  │  │ └──────────┘ │  │  └────────────┘  │
-│  └──────────┘  │  └──────────────┘  └──────────────────┘
-└────────────────┘
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚                      Microsoft Teams                             â”‚
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+                           â”‚
+                           â–¼
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚                    FastAPI Backend                               â”‚
+â”‚  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”    â”‚
+â”‚  â”‚ Bot Framework â”‚  â”‚ OAuth Cache  â”‚  â”‚ Typing Indicators â”‚    â”‚
+â”‚  â”‚    Webhook    â”‚  â”‚ (Thread-safe)â”‚  â”‚   (Real-time)     â”‚    â”‚
+â”‚  â””â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”˜  â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜  â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜    â”‚
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¼â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+           â”‚
+           â–¼
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚                   RAG Orchestrator                               â”‚
+â”‚  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”   â”‚
+â”‚  â”‚              LangGraph ReAct Agent                       â”‚   â”‚
+â”‚  â”‚  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â” â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â” â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”   â”‚   â”‚
+â”‚  â”‚  â”‚ execute_sql â”‚ â”‚  lookup_    â”‚ â”‚ search_documentsâ”‚   â”‚   â”‚
+â”‚  â”‚  â”‚             â”‚ â”‚  equipment  â”‚ â”‚                 â”‚   â”‚   â”‚
+â”‚  â”‚  â””â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”˜ â””â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”˜ â””â”€â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”˜   â”‚   â”‚
+â”‚  â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¼â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¼â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¼â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜   â”‚
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¼â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¼â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¼â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+             â”‚               â”‚                 â”‚
+             â–¼               â–¼                 â–¼
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚   PostgreSQL   â”‚  â”‚    Redis     â”‚  â”‚     Pinecone     â”‚
+â”‚  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”  â”‚  â”‚ â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â” â”‚  â”‚  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”  â”‚
+â”‚  â”‚ 2,400+   â”‚  â”‚  â”‚ â”‚ Session  â”‚ â”‚  â”‚  â”‚ Equipment  â”‚  â”‚
+â”‚  â”‚Equipment â”‚  â”‚  â”‚ â”‚ History  â”‚ â”‚  â”‚  â”‚  Manuals   â”‚  â”‚
+â”‚  â”‚ Records  â”‚  â”‚  â”‚ â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜ â”‚  â”‚  â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜  â”‚
+â”‚  â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜  â”‚  â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜  â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
 ```
 
 ---
@@ -70,7 +70,7 @@ A Microsoft Teams bot backend that serves as an intelligent assistant for **RÜK
 ## Key Features
 
 ### Autonomous AI Agent
-Built on **LangGraph's ReAct pattern**, the agent autonomously decides which tools to use based on query context. No rigid decision trees — the LLM naturally reasons about whether to query the database, search documents, or look up specific equipment.
+Built on **LangGraph's ReAct pattern**, the agent autonomously decides which tools to use based on query context. No rigid decision trees â€” the LLM naturally reasons about whether to query the database, search documents, or look up specific equipment.
 
 ### Hybrid Data Retrieval
 Combines structured PostgreSQL queries with semantic Pinecone search. Equipment specs come from the database; operating manuals and technical guides come from vector search. Results are synthesized into coherent German responses.
@@ -90,7 +90,7 @@ Every query passes through validation:
 - Identifier validation prevents injection
 
 ### Provider Flexibility
-Swap between **OpenAI**, **Cerebras**, or **Groq** via environment variables. Supports reasoning models (o1/o3) with automatic parameter handling.
+The runtime uses **Google Gemini** for advisory, LangGraph retrieval, and grounded fallback responses, while **OpenAI embeddings** remain in place for the existing Pinecone index.
 
 ---
 
@@ -100,7 +100,7 @@ Swap between **OpenAI**, **Cerebras**, or **Groq** via environment variables. Su
 |-------|------------|
 | **API Framework** | FastAPI with async/await |
 | **Agent Framework** | LangGraph ReAct |
-| **LLM Providers** | OpenAI GPT-4o, Groq Llama 4, Cerebras |
+| **LLM Providers** | Google Gemini for chat/runtime, OpenAI embeddings for Pinecone |
 | **Structured Data** | PostgreSQL with connection pooling |
 | **Vector Search** | Pinecone + text-embedding-3-large |
 | **Session State** | Redis with 24-hour TTL |
@@ -115,10 +115,10 @@ Swap between **OpenAI**, **Cerebras**, or **Groq** via environment variables. Su
 Equipment specs use German decimal notation (1,5m). The system automatically handles CAST/REPLACE conversions for numeric comparisons in SQL.
 
 **Concurrent Search**
-Parallel Pinecone namespace queries using asyncio.gather() — documents and machinery data searched simultaneously.
+Parallel Pinecone namespace queries using asyncio.gather() â€” documents and machinery data searched simultaneously.
 
 **Graceful Degradation**
-If LangGraph fails → fallback to simplified agent → fallback to direct Pinecone search. The system always responds.
+If Gemini advisory routing or LangGraph retrieval fails, the bot falls back to direct Pinecone search. The system still responds.
 
 **Real-time UX**
 Continuous typing indicators every 2.5 seconds keep Teams showing "Bot is typing..." during long reasoning operations.
@@ -132,16 +132,17 @@ Unique thread keys (`{user_id}:{conversation_id}`) prevent conversation bleed in
 
 ```
 teams-bot-dev/
-├── app.py                 # FastAPI entry point, Teams webhook
-├── cli_tester.py          # Local testing without Teams
-├── rag/
-│   ├── langgraph_agent.py # LangGraph ReAct agent with tools
-│   ├── search.py          # RAG orchestrator
-│   ├── postgres.py        # SQL safety wrapper
-│   ├── vector_store.py    # Pinecone integration
-│   ├── schema_linker.py   # Semantic column resolution
-│   └── config.py          # Centralized configuration
-└── admin_dashboard/       # Flask monitoring UI
+|-- app.py                # FastAPI entry point, Teams webhook
+|-- cli_tester.py         # Local testing without Teams
+|-- rag/
+|   |-- langgraph_agent.py # Thin LangGraph runtime wrapper
+|   |-- langgraph_tools.py # Safe SQL and document tools
+|   |-- prompts.py         # Centralized prompts and bot copy
+|   |-- search.py          # RAG orchestrator
+|   |-- postgres.py        # SQL safety wrapper
+|   |-- vector_store.py    # Pinecone integration
+|   `-- config.py          # Centralized configuration
+`-- admin_dashboard/      # Flask monitoring UI
 ```
 
 ---
@@ -157,9 +158,9 @@ Agent: [Calling execute_sql]
        AND geraetegruppe_name ILIKE '%walze%'
 
 Bot:  Wir haben 47 Bomag Walzen im Bestand.
-      Davon sind 32 zur Miete und 15 zum Verkauf verfügbar.
+      Davon sind 32 zur Miete und 15 zum Verkauf verfÃ¼gbar.
 
-      Möchten Sie Details zu bestimmten Modellen?
+      MÃ¶chten Sie Details zu bestimmten Modellen?
 ```
 
 ---
@@ -168,6 +169,6 @@ Bot:  Wir haben 47 Bomag Walzen im Bestand.
 
 **Built with modern AI engineering practices**
 
-*LangGraph Agents • RAG Architecture • Production-Grade Error Handling*
+*LangGraph Agents â€¢ RAG Architecture â€¢ Production-Grade Error Handling*
 
 </div>

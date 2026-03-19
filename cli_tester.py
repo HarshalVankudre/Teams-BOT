@@ -49,8 +49,13 @@ class TestCase:
     name: str
     query: str
     category: str = "general"
+    pipeline: str = "langgraph"
+    reset_context: bool = False
+    expected_agent: Optional[str] = None
     expected_tools: List[str] = field(default_factory=list)
+    expected_tools_any: List[str] = field(default_factory=list)
     expected_keywords: List[str] = field(default_factory=list)
+    forbidden_keywords: List[str] = field(default_factory=list)
     min_results: int = 0
     timeout_ms: int = 120000
 
@@ -65,6 +70,7 @@ class TestResult:
     query: str = ""
     response: str = ""
     error: str = ""
+    agent: str = ""
     tools_used: List[str] = field(default_factory=list)
     sql_rows: int = 0
     assertions_passed: int = 0
@@ -127,17 +133,14 @@ class TestRunner:
         print(f"\n{Colors.BOLD}Initializing Test Environment{Colors.RESET}")
         print("-" * 50)
         
-        self.config = self.postgres = self.pinecone = self.langgraph_agent = None
+        self.config = self.postgres = self.pinecone = self.langgraph_agent = self.rag_search = None
         
         # Config
         try:
             from rag.config import config
             self.config = config
-            if config.groq_api_key:
-                model_display = f"{config.groq_model} (Groq)"
-            else:
-                model_display = config.openai_model
-            print(f"  Config       {Colors.GREEN}OK{Colors.RESET}  Model: {model_display}")
+            model_display = f"Gemini advisory={config.advisory_model}, LangGraph={config.langgraph_model}"
+            print(f"  Config       {Colors.GREEN}OK{Colors.RESET}  {model_display}")
         except Exception as e:
             print(f"  Config       {Colors.RED}FAIL{Colors.RESET}  {e}")
         
@@ -177,12 +180,22 @@ class TestRunner:
             print(f"  LangGraph    {Colors.GREEN}OK{Colors.RESET}  (Priority 1)")
         except Exception as e:
             print(f"  LangGraph    {Colors.RED}FAIL{Colors.RESET}  {e}")
+
+        # Full RAG pipeline
+        try:
+            from rag.search import RAGSearch
+            self.rag_search = RAGSearch()
+            print(f"  RAG Search   {Colors.GREEN}OK{Colors.RESET}  (Full routing)")
+        except Exception as e:
+            print(f"  RAG Search   {Colors.YELLOW}WARN{Colors.RESET}  {e}")
         
         print("-" * 50)
     
     async def run_test(self, test: TestCase) -> TestResult:
         """Execute a single test case"""
         start = time.time()
+        if test.reset_context:
+            self.clear_context()
         result = TestResult(
             test_id=test.id,
             test_name=test.name,
@@ -192,13 +205,21 @@ class TestRunner:
         )
         
         try:
-            response = await self._execute_query(test.query)
+            response = await self._execute_query(test.query, pipeline=test.pipeline)
             result.duration_ms = int((time.time() - start) * 1000)
             result.response = response.get("response", "")
+            result.agent = response.get("agent", "")
             result.tools_used = response.get("tools_used", [])
             result.sql_rows = response.get("sql_rows", 0)
             
             # Check assertions
+            if test.expected_agent:
+                if result.agent == test.expected_agent:
+                    result.assertions_passed += 1
+                else:
+                    result.assertions_failed += 1
+                    result.status = TestStatus.FAILED
+
             if test.expected_tools:
                 for tool in test.expected_tools:
                     if tool in result.tools_used:
@@ -206,7 +227,14 @@ class TestRunner:
                     else:
                         result.assertions_failed += 1
                         result.status = TestStatus.FAILED
-            
+
+            if test.expected_tools_any:
+                if any(tool in result.tools_used for tool in test.expected_tools_any):
+                    result.assertions_passed += 1
+                else:
+                    result.assertions_failed += 1
+                    result.status = TestStatus.FAILED
+
             if test.expected_keywords:
                 response_lower = result.response.lower()
                 for kw in test.expected_keywords:
@@ -214,6 +242,16 @@ class TestRunner:
                         result.assertions_passed += 1
                     else:
                         result.assertions_failed += 1
+                        result.status = TestStatus.FAILED
+
+            if test.forbidden_keywords:
+                response_lower = result.response.lower()
+                for kw in test.forbidden_keywords:
+                    if kw.lower() in response_lower:
+                        result.assertions_failed += 1
+                        result.status = TestStatus.FAILED
+                    else:
+                        result.assertions_passed += 1
             
         except Exception as e:
             result.status = TestStatus.ERROR
@@ -222,35 +260,61 @@ class TestRunner:
         
         return result
     
-    async def _execute_query(self, query: str) -> Dict[str, Any]:
-        """Execute query through LangGraph agent"""
-        if not self.langgraph_agent:
-            raise RuntimeError("LangGraph agent not available")
-        
-        print(f"\n{'='*60}")
-        print(f"🤖 LANGGRAPH PROCESSING: {query}")
-        print(f"🧵 Thread: {self.thread_key}")
-        print(f"{'='*60}\n")
-        
-        result = await self.langgraph_agent.process(
-            user_query=query,
-            thread_key=self.thread_key,
-            conversation_history=self.conversation_history
-        )
-        
-        # Handle both dict and AgentResult object
-        if hasattr(result, 'response'):
-            # AgentResult object
-            response_text = result.response or ""
-            tools_used = result.tools_used or []
-            processing_time = getattr(result, 'processing_time_ms', 0)
-            sql_rows = getattr(result, 'sql_rows', 0)
-        else:
-            # Dictionary
+    async def _execute_query(self, query: str, pipeline: str = "langgraph") -> Dict[str, Any]:
+        """Execute query through LangGraph or the full RAG pipeline."""
+        if pipeline == "full":
+            if not self.rag_search:
+                raise RuntimeError("RAGSearch not available")
+
+            print(f"\n{'='*60}")
+            print(f"🤖 FULL RAG PROCESSING: {query}")
+            print(f"🧵 Thread: {self.thread_key}")
+            print(f"{'='*60}\n")
+
+            result = await self.rag_search.search_and_generate(
+                query=query,
+                thread_key=self.thread_key,
+            )
+
             response_text = result.get("response", "")
-            tools_used = result.get("tools_used", [])
-            processing_time = result.get("processing_time_ms", 0)
-            sql_rows = result.get("sql_rows", 0)
+            tools_used = result.get("agents_used", [])
+            processing_time = result.get("execution_time_ms", 0)
+            agent = result.get("agent", "")
+            sql_rows = 0
+        else:
+            if not self.langgraph_agent:
+                raise RuntimeError("LangGraph agent not available")
+
+            print(f"\n{'='*60}")
+            print(f"🤖 LANGGRAPH PROCESSING: {query}")
+            print(f"🧵 Thread: {self.thread_key}")
+            print(f"{'='*60}\n")
+        
+            result = await self.langgraph_agent.process(
+                user_query=query,
+                thread_key=self.thread_key,
+                conversation_history=self.conversation_history
+            )
+        
+            # Handle both dict and AgentResult object
+            if hasattr(result, 'response'):
+                # AgentResult object
+                response_text = result.response or ""
+                tools_used = result.tools_used or []
+                processing_time = getattr(
+                    result,
+                    'processing_time_ms',
+                    getattr(result, 'execution_time_ms', 0),
+                )
+                sql_rows = getattr(result, 'sql_rows', 0)
+                agent = "langgraph"
+            else:
+                # Dictionary
+                response_text = result.get("response", "")
+                tools_used = result.get("tools_used", [])
+                processing_time = result.get("processing_time_ms", 0)
+                sql_rows = result.get("sql_rows", 0)
+                agent = result.get("agent", "langgraph")
         
         # Update conversation history
         self.conversation_history.append({"role": "user", "content": query})
@@ -262,12 +326,14 @@ class TestRunner:
         
         print(f"\n{'='*60}")
         print(f"✅ RESPONSE READY ({processing_time}ms)")
+        print(f"🤖 Agent: {agent}")
         print(f"🔧 Tools used: {tools_used}")
         print(f"📝 Response: {response_text[:200]}..." if len(response_text) > 200 else f"📝 Response: {response_text}")
         print(f"{'='*60}\n")
         
         return {
             "response": response_text,
+            "agent": agent,
             "tools_used": tools_used,
             "sql_rows": sql_rows
         }
@@ -284,7 +350,11 @@ class TestRunner:
         if result.response:
             print(f"\n{Colors.BOLD}Response:{Colors.RESET}")
             print(result.response)
-        
+
+        if result.agent:
+            print(f"\n{Colors.BOLD}Agent:{Colors.RESET}")
+            print(result.agent)
+
         if result.tools_used:
             print(f"\n{Colors.BOLD}Tools Used:{Colors.RESET}")
             for tool in result.tools_used:
@@ -486,14 +556,14 @@ def get_default_tests() -> List[TestCase]:
             id="sql_count", 
             name="SQL Count Query", 
             query="Wie viele Maschinen haben wir?", 
-            expected_tools=["query_equipment"],
+            expected_tools_any=["count_equipment", "execute_sql"],
             expected_keywords=["maschinen"]
         ),
         TestCase(
             id="sql_filter", 
             name="SQL Filter Query", 
             query="Wie viele Bomag Maschinen?",
-            expected_tools=["query_equipment"],
+            expected_tools_any=["count_equipment", "execute_sql"],
             expected_keywords=["bomag"]
         ),
         TestCase(
@@ -507,7 +577,7 @@ def get_default_tests() -> List[TestCase]:
             id="manufacturer", 
             name="Manufacturer Query", 
             query="Welche Hersteller gibt es?",
-            expected_tools=["query_equipment"]
+            expected_tools_any=["explore_column", "query_equipment"]
         ),
         TestCase(
             id="rental", 
@@ -521,10 +591,101 @@ def get_default_tests() -> List[TestCase]:
     return tests
 
 
+def get_transcript_regression_tests() -> List[TestCase]:
+    """Regression cases derived from real conversation failures."""
+    return [
+        TestCase(
+            id="planner_seed",
+            name="Planner Seed",
+            query="Empfehle mir bitte eine Maschine fuer den Asphalteinbau von 3,5m",
+            pipeline="full",
+            reset_context=True,
+        ),
+        TestCase(
+            id="planner_followup_override",
+            name="Planner Follow-up Override",
+            query="Welche Hoehe hat die Maschine mit der Seriennummer: KBCEZN5BHSWA55197",
+            pipeline="full",
+            expected_agent="postgres_direct",
+            expected_keywords=["2540"],
+            forbidden_keywords=["projekt-dossier"],
+        ),
+        TestCase(
+            id="machine_pronoun_followup",
+            name="Machine Pronoun Follow-up",
+            query="Welche Verwendung hat diese Maschine?",
+            pipeline="full",
+            expected_agent="postgres_direct",
+            expected_keywords=["verwendung", "miet"],
+            forbidden_keywords=["projekt-dossier"],
+        ),
+        TestCase(
+            id="machine_info_db",
+            name="Machine Info From DB",
+            query="Bitte gib mir alle Infos zur Maschine 101870941182 die du in der Datenbank finden kannst",
+            pipeline="full",
+            reset_context=True,
+            expected_agent="postgres_direct",
+            expected_keywords=["bomag", "seriennummer", "inventarnummer", "| eigenschaft | wert |"],
+            forbidden_keywords=["projekt-dossier"],
+        ),
+        TestCase(
+            id="model_info_lookup",
+            name="Model Info Lookup",
+            query="Gib mir naehere Infos zum Super 1300-3i",
+            pipeline="full",
+            reset_context=True,
+            expected_agent="langgraph",
+            expected_keywords=["super 1300-3i", "seriennummer"],
+            forbidden_keywords=["projekt-dossier"],
+        ),
+        TestCase(
+            id="raw_property_table",
+            name="Raw Property Table",
+            query="Bitte ohne Interpretation einfach nur Eigenschaft und Wert aus der Datenbank fuer Maschine 101870941182",
+            pipeline="full",
+            reset_context=True,
+            expected_agent="postgres_direct",
+            expected_keywords=["| eigenschaft | wert |", "seriennummer"],
+            forbidden_keywords=["projekt-dossier"],
+        ),
+        TestCase(
+            id="width_recommendation_extensions",
+            name="Width Recommendation Extensions",
+            query="Empfehle mir bitte eine Maschine fuer den Asphalteinbau von 3,2m aus dem Mietpark",
+            pipeline="full",
+            reset_context=True,
+            expected_agent="langgraph",
+            expected_keywords=["super 800", "verbreiter"],
+            forbidden_keywords=["projekt-dossier"],
+        ),
+        TestCase(
+            id="hgt_inventory_lookup",
+            name="HGT Inventory Lookup",
+            query="Welcher Fertiger aus dem Mietpark kann HGT einbauen?",
+            pipeline="full",
+            reset_context=True,
+            expected_agent="langgraph",
+            expected_keywords=["hgt"],
+            forbidden_keywords=["projekt-dossier"],
+        ),
+        TestCase(
+            id="serial_height_lookup",
+            name="Serial Height Lookup",
+            query="Welche Hoehe hat die Maschine mit der Seriennummer: KBCEZN5BHSWA55197",
+            pipeline="full",
+            reset_context=True,
+            expected_agent="postgres_direct",
+            expected_keywords=["2540"],
+            forbidden_keywords=["projekt-dossier"],
+        ),
+    ]
+
+
 async def interactive_mode(runner: TestRunner):
     """Interactive testing mode"""
     print(f"\n{Colors.BOLD}Interactive Mode{Colors.RESET}")
-    print("Commands: /help /sql /search /stats /schema /batch /clear /export /exit")
+    print("Commands: /help /sql /search /stats /schema /batch /regressions /clear /export /exit")
     print("Plain text = run as query test\n")
     
     while True:
@@ -545,6 +706,7 @@ async def interactive_mode(runner: TestRunner):
                     print("/stats        - Database stats")
                     print("/schema       - Schema info")
                     print("/batch        - Run all tests")
+                    print("/regressions  - Run transcript-derived regression tests")
                     print("/clear        - Clear context")
                     print("/export       - Export results")
                     print("/exit         - Exit\n")
@@ -558,6 +720,8 @@ async def interactive_mode(runner: TestRunner):
                     runner.show_schema()
                 elif action == "/batch":
                     await runner.run_suite(get_default_tests())
+                elif action == "/regressions":
+                    await runner.run_suite(get_transcript_regression_tests())
                 elif action == "/clear":
                     runner.clear_context()
                 elif action == "/export":
@@ -580,6 +744,7 @@ async def main():
     parser = argparse.ArgumentParser(description="Teams Bot RAG Test Suite")
     parser.add_argument("query", nargs="?", help="Query to test")
     parser.add_argument("-b", "--batch", action="store_true", help="Run all tests")
+    parser.add_argument("-r", "--regressions", action="store_true", help="Run transcript-derived regression tests")
     parser.add_argument("-s", "--sql", help="Direct SQL test")
     parser.add_argument("-d", "--search", help="Document search test")
     parser.add_argument("--stats", action="store_true", help="Show DB stats")
@@ -595,6 +760,9 @@ async def main():
     
     if args.batch:
         await runner.run_suite(get_default_tests())
+        exit_code = runner.print_summary()
+    elif args.regressions:
+        await runner.run_suite(get_transcript_regression_tests())
         exit_code = runner.print_summary()
     elif args.sql:
         runner.test_sql(args.sql)
